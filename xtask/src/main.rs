@@ -11,9 +11,10 @@
 //! - `fixtures [crate…]`: pre-generate the ffmpeg fixture matrix of the oracle tests (runs each
 //!   crate's ignored `generate_fixtures` test, i.e. the same generators the tests use) and print
 //!   what was made, reused or skipped.
-//! - `parity [--reference FILE] [--out FILE] [--min PERCENT]`: measured menu parity of our shipped
-//!   menu bar against a reference list of menu paths (default: the local `plan/premiere/menus.json`),
-//!   presence and placement reported separately (`parity.rs`, docs/gaps.md G7).
+//! - `parity [--area menus|effects|transitions] [--reference FILE] [--out FILE] [--min PERCENT]`:
+//!   measured parity of our shipped menu bar, or of the effects / transitions the Effects panel
+//!   lists, against a reference list (default: the local `plan/premiere/<area>.json`), presence and
+//!   placement reported separately (`parity.rs`, docs/gaps.md G7).
 //! - `ico <out.ico> <in.png>…`: pack PNGs into a Windows `.ico` (used by `packaging/icons.sh`).
 //! - `ci`: fmt check, clippy -D warnings, tests, layers, assets, wasm.
 
@@ -500,7 +501,7 @@ fn main() -> ExitCode {
             ico::run(&rest.iter().map(String::as_str).collect::<Vec<_>>())
         }
         _ => Err(
-            "usage: cargo xtask <layers|assets|wasm|web [--dev] [--serve PORT]|fixtures [crate…]|parity [--reference FILE] [--out FILE] [--min PERCENT]|ico OUT IN…|version [set X.Y.Z]|ci|bench [args]|bench-playback [args]>"
+            "usage: cargo xtask <layers|assets|wasm|web [--dev] [--serve PORT]|fixtures [crate…]|parity [--area menus|effects|transitions] [--reference FILE] [--out FILE] [--min PERCENT]|ico OUT IN…|version [set X.Y.Z]|ci|bench [args]|bench-playback [args]>"
                 .into(),
         ),
     };

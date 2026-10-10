@@ -127,8 +127,13 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
   `plan/premiere/menus.json`; presence and placement reported separately (same path, elsewhere,
   missing), app / Help / recent / account / macOS items out of scope, a markdown checklist, and
   `--min` to fail below a presence threshold. Without a reference it prints our inventory only.
-- **Missing:** the other areas (commands, effects, transitions, panels, preferences, formats),
-  fidelity tiers (exact, approximate, stub), a CI job, and a committed `docs/parity-checklist.md`.
+  `--area effects` and `--area transitions` (#831) measure the Effects panel the same way: the
+  effects and transitions the engine's effect definitions list (`examples/effect_catalog.rs` in
+  `filmcraft-project`) against a reference of folder paths or bare names (default the local
+  `plan/premiere/effects.json` / `transitions.json`), placement by folder, Presets and the other
+  area out of scope.
+- **Missing:** the other areas (commands, panels, preferences, formats), fidelity tiers (exact,
+  approximate, stub), a CI job, and a committed `docs/parity-checklist.md`.
 - **Evidence:** the 92% menu figure in this pass came from an ad hoc label-matching script; it has
   not yet been re-measured with the tool.
 - **Estimate:** 8–17 h left (the menu snapshot is local-only, so CI needs a committed, Adobe-free
