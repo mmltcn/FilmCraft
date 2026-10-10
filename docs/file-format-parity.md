@@ -55,7 +55,7 @@ only). "Tested" names the evidence.
 | PNG, JPEG, TIFF, BMP, GIF | read + write | yes | PNG / TIFF / BMP / JPEG sequences, GIF | 90% |
 | WebP | — | yes | no | ahead |
 | **PSD** (layers as sequence) | read (layered) | no | — | 0% |
-| **OpenEXR** | read + write | no | sequences (half float, linear RGB / premultiplied RGBA, uncompressed; #806) | 35% |
+| **OpenEXR** | read + write | stills and sequences: scan-line, none / RLE / ZIPS / ZIP, half / float / uint, RGB(A) or Y, kept as linear float (#828); no PIZ, PXR24, B44, DWA, tiled, multi-part or deep | sequences (half float, linear RGB / premultiplied RGBA, uncompressed; #806) | 70% |
 | **DPX** | read + write | yes: luma / RGB / RGBA, 8–16-bit, filled 10/12-bit, either byte order (#821); no packed 10/12-bit, RLE or Y'CbCr | sequences (10-bit RGB, BT.709; #779) | 80% |
 | Targa | read + write | yes: every image type, RLE, colour maps, 15–32-bit (#821) | sequences (24-bit, 32-bit with alpha; #779) | 95% |
 | HEIF / HEIC | read | no | — | 0% |

@@ -17,3 +17,6 @@ rayon = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "tiff", "bmp"] }
+
+[dev-dependencies]
+filmcraft-testkit = { workspace = true }

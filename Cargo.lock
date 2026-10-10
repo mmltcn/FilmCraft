@@ -2068,6 +2068,7 @@ version = "0.5.0"
 dependencies = [
  "filmcraft-color",
  "filmcraft-frame",
+ "filmcraft-testkit",
  "filmcraft-time",
  "image",
  "rayon",

@@ -1,4 +1,4 @@
-//! Still images (PNG, JPEG, GIF (first frame), WebP, TIFF, BMP, Targa, DPX) as media sources.
+//! Still images (PNG, JPEG, GIF (first frame), WebP, TIFF, BMP, Targa, DPX, OpenEXR) as media sources.
 
 use std::sync::Arc;
 
@@ -6,6 +6,8 @@ use filmcraft_frame::VideoFrame;
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 use crate::{FrameRequest, MediaError, MediaInfo, MediaKind, MediaSource, Result, VideoStreamInfo};
+
+pub mod exr;
 
 /// Default still duration (Premiere's preference default is 5 seconds).
 pub const DEFAULT_STILL_DURATION: Tick = Tick(5 * TICKS_PER_SECOND);
