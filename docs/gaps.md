@@ -229,6 +229,10 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 
 - **Evidence:** Asus Xonar DX output broken (#605), no audio (#602), audio cuts out with
   overlapping clips (#336), buggy audio (#410), Linux stutter (#617). No ASIO; cpal only.
+- **Have:** a stream the device drops while playing (an ALSA xrun cpal reports as `POLLERR`, an
+  unplugged device) is restarted with the same rate, channels, clock and mixer position, so sound
+  resumes instead of playback going silent (at most 3 restarts in 10 s); a panicking mixer plays
+  silence (#840).
 - **Estimate:** 20–40 h.
 
 ## G18. Effects depth: approximations and missing behaviour

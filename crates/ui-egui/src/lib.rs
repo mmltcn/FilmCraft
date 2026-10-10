@@ -80,6 +80,10 @@ pub trait AudioOut {
     }
     /// Frames played since `start` (the playback master clock), if the device reports it.
     fn played_frames(&self) -> Option<u64>;
+    /// Called every frame while playing, before `played_frames`: restart a stream the device
+    /// dropped (a driver error, an unplugged device), keeping the clock and `fill`. A stream that
+    /// cannot be restarted reports `played_frames() == None`.
+    fn recover(&mut self) {}
     /// Hosts and devices that can be chosen in Settings ▸ Audio Hardware.
     fn devices(&self) -> AudioDevices {
         AudioDevices::default()
@@ -1013,6 +1017,11 @@ impl FilmcraftApp {
             self.playback.anchor_time = now;
         }
         let rate = self.session.sequence_rate();
+        if self.playback.audio_clock
+            && let Some(audio) = self.audio.as_mut()
+        {
+            audio.recover();
+        }
         let reading = if self.playback.audio_clock { self.audio.as_ref().and_then(|a| a.played_frames().map(|f| (f, a.sample_rate()))) } else { None };
         if self.playback.audio_clock && reading.is_none() {
             // A device error relinquishes its clock immediately. Resume from the displayed
@@ -2261,6 +2270,52 @@ mod audio_recovery_tests {
         assert_eq!(app.playback.anchor_tick, displayed);
         assert_eq!(app.session.playhead(), displayed);
         assert!(app.ui.status.contains("Audio output failed"));
+        app.stop();
+    }
+
+    /// A stream the device dropped, which `recover` restarts on the same clock.
+    struct Restartable {
+        reading: Option<u64>,
+    }
+
+    impl AudioOut for Restartable {
+        fn start(&mut self, _: Box<dyn FnMut(&mut [f32], usize) + Send>) -> Result<u32, String> {
+            Ok(48000)
+        }
+        fn stop(&mut self) {}
+        fn sample_rate(&self) -> u32 {
+            48000
+        }
+        fn played_frames(&self) -> Option<u64> {
+            self.reading
+        }
+        fn recover(&mut self) {
+            self.reading = self.reading.or(Some(48_000));
+        }
+    }
+
+    #[test]
+    fn a_restarted_stream_keeps_the_device_clock_and_the_sound() {
+        let mut session = Session::default();
+        session.execute("file.openDemoProject", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = FilmcraftApp::new(session);
+        app.audio = Some(Box::new(Restartable { reading: None }));
+        app.playback.playing = true;
+        app.playback.audio_clock = true;
+        app.playback.anchor_tick = Tick::ZERO;
+        app.playback.anchor_time = 0.0;
+        app.playback.audio_seen = (0, 10.0);
+        let mut output = ctx.run_ui(egui::RawInput { time: Some(10.0), ..Default::default() }, |ui| app.advance_playback(ui.ctx()));
+        output.textures_delta.clear();
+        assert!(app.playback.audio_clock, "the restarted stream is still the master clock");
+        assert!(!app.ui.status.contains("Audio output failed"));
+        // 48 000 frames played at 48 kHz: one second in, on a frame boundary
+        let (shown, second) = (app.session.playhead(), Tick::from_seconds_f64(1.0));
+        assert!(
+            shown <= second && shown + app.session.sequence_rate().frame_duration() > second,
+            "the playhead follows the frames the device played: {shown:?}"
+        );
         app.stop();
     }
 }
