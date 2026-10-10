@@ -675,7 +675,10 @@ impl GopCache {
             }
         }
         if st.cached(want_pts, draft).is_none() {
-            let out = st.decoder.as_mut().map(|d| timed(|| d.flush())).unwrap_or_default();
+            let out = match st.decoder.as_mut() {
+                Some(d) => timed(|| d.flush_result())?,
+                None => Vec::new(),
+            };
             self.store_output(&mut st, out);
             st.next = usize::MAX;
         }
@@ -739,7 +742,7 @@ impl GopCache {
             }
         }
         if !found {
-            let pics = timed(|| d.flush());
+            let pics = timed(|| d.flush_result())?;
             count_frames(&pics);
             out.extend(pics);
             *next = usize::MAX;
@@ -777,6 +780,58 @@ impl GopCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FlushFailure;
+    impl VideoDecoder for FlushFailure {
+        fn decode(&mut self, _: &[u8], _: i64) -> crate::Result<Vec<DecodedFrame>> {
+            Ok(Vec::new())
+        }
+        fn flush(&mut self) -> Vec<DecodedFrame> {
+            Vec::new()
+        }
+        fn flush_result(&mut self) -> crate::Result<Vec<DecodedFrame>> {
+            Err(CodecError::Decode("synthetic delayed decode error".into()))
+        }
+        fn reset(&mut self) {}
+        fn name(&self) -> &str {
+            "flush failure"
+        }
+    }
+    impl VideoSamples for FlushFailure {
+        fn count(&self) -> usize {
+            1
+        }
+        fn pts(&self, _: usize) -> i64 {
+            0
+        }
+        fn sync_before(&self, _: usize) -> usize {
+            0
+        }
+        fn sample_at(&self, _: i64) -> Option<usize> {
+            Some(0)
+        }
+        fn read(&self, _: usize) -> crate::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn make_decoder(&self) -> crate::Result<Box<dyn VideoDecoder>> {
+            Ok(Box::new(FlushFailure))
+        }
+    }
+    #[test]
+    fn cache_reports_delayed_decoder_failure() {
+        let cache = GopCache::new(None);
+        let error = cache.frame(&FlushFailure, 0).unwrap_err();
+        assert!(error.to_string().contains("synthetic delayed decode error"), "{error}");
+        let mut decoder = FlushFailure;
+        let mut next = 0;
+        assert!(
+            GopCache::decode_to(&FlushFailure, &mut decoder, &mut next, 0, 0, 1)
+                .err()
+                .expect("delayed error")
+                .to_string()
+                .contains("synthetic delayed decode error")
+        );
+    }
     use crate::video::DecodedFrame;
     use std::collections::VecDeque;
 

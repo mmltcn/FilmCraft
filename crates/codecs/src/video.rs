@@ -19,7 +19,12 @@ pub struct DecodedFrame {
 pub trait VideoDecoder: Send {
     fn decode(&mut self, sample: &[u8], pts: i64) -> Result<Vec<DecodedFrame>>;
     /// Drain pictures held for reordering (end of stream / before a seek).
+    /// Legacy infallible drain. Call `flush_result` when decoding failures must be reported.
     fn flush(&mut self) -> Vec<DecodedFrame>;
+    /// Drain delayed pictures and preserve asynchronous decoding failures.
+    fn flush_result(&mut self) -> Result<Vec<DecodedFrame>> {
+        Ok(self.flush())
+    }
     /// Forget all state (called after seeking to a sync sample).
     fn reset(&mut self);
     fn name(&self) -> &str;
@@ -608,14 +613,25 @@ impl VideoDecoder for Av1Decoder {
             .collect())
     }
     fn flush(&mut self) -> Vec<DecodedFrame> {
-        self.dec
-            .flush()
+        match self.flush_result() {
+            Ok(frames) => frames,
+            Err(e) => {
+                log::error!("AV1 decoder flush failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+    fn flush_result(&mut self) -> Result<Vec<DecodedFrame>> {
+        Ok(self
+            .dec
+            .flush_result()
+            .map_err(|e| CodecError::Decode(e.to_string()))?
             .into_iter()
             .map(|p| {
                 let pts = p.pts;
                 Self::convert(p, pts)
             })
-            .collect()
+            .collect())
     }
     fn reset(&mut self) {
         self.dec = filmcraft_av1::Decoder::new();

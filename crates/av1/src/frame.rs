@@ -8,24 +8,47 @@
 /// megabytes of planes, and fresh large allocations cost page faults and kernel calls. Buffers
 /// are zeroed again on reuse, so contents never leak between frames.
 static PLANE_POOL: std::sync::Mutex<Vec<Vec<u16>>> = std::sync::Mutex::new(Vec::new());
+use crate::{Error, Result};
+
+pub(crate) fn allocate<T: Clone>(value: T, len: usize) -> Result<Vec<T>> {
+    let mut data = Vec::new();
+    data.try_reserve_exact(len).map_err(|_| Error::AllocationFailed)?;
+    data.resize(len, value);
+    Ok(data)
+}
+pub(crate) fn allocate3<T: Clone>(value: T, len: usize) -> Result<[Vec<T>; 3]> {
+    Ok([allocate(value.clone(), len)?, allocate(value.clone(), len)?, allocate(value, len)?])
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    #[test]
+    fn hostile_allocation_sizes_return_errors() {
+        assert!(matches!(allocate(0u16, usize::MAX), Err(Error::AllocationFailed)));
+        assert!(matches!(Plane::new(usize::MAX, 2), Err(Error::AllocationFailed)));
+        assert!(matches!(Plane::region(0, 0, usize::MAX, 2), Err(Error::AllocationFailed)));
+    }
+}
 const POOL_MIN_LEN: usize = 1 << 16;
 /// Samples kept at most (96 M samples = 192 MB, a few 4K frames).
 const POOL_MAX_SAMPLES: usize = 96 << 20;
 
 /// A zeroed buffer of `len` samples (recycled memory for large ones).
-fn zeroed(len: usize) -> Vec<u16> {
+fn zeroed(len: usize) -> Result<Vec<u16>> {
     if len >= POOL_MIN_LEN {
         let found = {
             let mut pool = PLANE_POOL.lock().unwrap_or_else(|e| e.into_inner());
-            pool.iter().position(|v| v.capacity() >= len && v.capacity() <= 2 * len).map(|i| pool.swap_remove(i))
+            pool.iter().position(|v| v.capacity() >= len && v.capacity() <= len.saturating_mul(2)).map(|i| pool.swap_remove(i))
         };
         if let Some(mut v) = found {
             v.clear();
             v.resize(len, 0);
-            return v;
+            return Ok(v);
         }
     }
-    vec![0; len]
+    allocate(0, len)
 }
 
 /// One plane of samples (u16 at every bit depth), or a rectangular region of one.
@@ -40,11 +63,11 @@ pub struct Plane {
     pub oy: usize,
 }
 
-impl Clone for Plane {
-    fn clone(&self) -> Plane {
-        let mut data = zeroed(self.data.len());
+impl Plane {
+    fn try_clone(&self) -> Result<Plane> {
+        let mut data = zeroed(self.data.len())?;
         data.copy_from_slice(&self.data);
-        Plane { data, stride: self.stride, rows: self.rows, ox: self.ox, oy: self.oy }
+        Ok(Plane { data, stride: self.stride, rows: self.rows, ox: self.ox, oy: self.oy })
     }
 }
 
@@ -62,12 +85,12 @@ impl Drop for Plane {
 }
 
 impl Plane {
-    pub fn new(width: usize, height: usize) -> Plane {
-        Plane { data: zeroed(width * height), stride: width, rows: height, ox: 0, oy: 0 }
+    pub fn new(width: usize, height: usize) -> Result<Plane> {
+        Ok(Plane { data: zeroed(width.checked_mul(height).ok_or(Error::AllocationFailed)?)?, stride: width, rows: height, ox: 0, oy: 0 })
     }
     /// A `width` x `height` region with its top-left sample at frame position (ox, oy).
-    pub fn region(ox: usize, oy: usize, width: usize, height: usize) -> Plane {
-        Plane { data: zeroed(width * height), stride: width, rows: height, ox, oy }
+    pub fn region(ox: usize, oy: usize, width: usize, height: usize) -> Result<Plane> {
+        Ok(Plane { data: zeroed(width.checked_mul(height).ok_or(Error::AllocationFailed)?)?, stride: width, rows: height, ox, oy })
     }
     #[inline(always)]
     pub fn at(&self, x: usize, y: usize) -> u16 {
@@ -109,7 +132,7 @@ impl Plane {
 }
 
 /// A frame's three planes, sized to the macroblock-aligned coded area plus margins.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct FrameBuf {
     pub planes: [Plane; 3],
     pub num_planes: usize,
@@ -124,30 +147,25 @@ pub struct FrameBuf {
 impl FrameBuf {
     /// Allocate a frame for a coded area of `width` x `height` luma samples (rounded up to the
     /// 128x128 superblock grid plus 160 samples of slack for blocks extending past the edge).
-    pub fn new(width: usize, height: usize, num_planes: usize, subsampling_x: usize, subsampling_y: usize, bit_depth: u8) -> FrameBuf {
-        let aw = width.div_ceil(128) * 128 + 160;
-        let ah = height.div_ceil(128) * 128 + 160;
+    pub fn new(width: usize, height: usize, num_planes: usize, subsampling_x: usize, subsampling_y: usize, bit_depth: u8) -> Result<FrameBuf> {
+        let padded =
+            |n: usize| n.checked_add(127).map(|n| n / 128).and_then(|n| n.checked_mul(128)).and_then(|n| n.checked_add(160)).ok_or(Error::AllocationFailed);
+        let aw = padded(width)?;
+        let ah = padded(height)?;
         let mut planes: [Plane; 3] = Default::default();
-        planes[0] = Plane::new(aw, ah);
+        planes[0] = Plane::new(aw, ah)?;
         for p in planes.iter_mut().take(num_planes).skip(1) {
-            *p = Plane::new(aw >> subsampling_x, ah >> subsampling_y);
+            *p = Plane::new(aw >> subsampling_x, ah >> subsampling_y)?;
         }
-        FrameBuf { planes, num_planes, subsampling_x, subsampling_y, bit_depth, width, height }
+        Ok(FrameBuf { planes, num_planes, subsampling_x, subsampling_y, bit_depth, width, height })
     }
 
-    /// The region of a frame of this geometry covering luma samples [x0, x1) x [y0, y1)
-    /// (chroma scaled down); the bounds are multiples of 8, or the allocated size.
-    pub fn region_like(&self, x0: usize, y0: usize, x1: usize, y1: usize) -> FrameBuf {
+    pub fn try_clone(&self) -> Result<FrameBuf> {
         let mut planes: [Plane; 3] = Default::default();
-        for (p, pl) in planes.iter_mut().enumerate().take(self.num_planes) {
-            let (sx, sy) = if p == 0 { (0, 0) } else { (self.subsampling_x, self.subsampling_y) };
-            let full = &self.planes[p];
-            let (px0, py0) = (x0 >> sx, y0 >> sy);
-            let px1 = (x1 >> sx).min(full.stride);
-            let py1 = (y1 >> sy).min(full.rows);
-            *pl = Plane::region(px0, py0, px1 - px0, py1 - py0);
+        for (p, src) in planes.iter_mut().zip(&self.planes) {
+            *p = src.try_clone()?;
         }
-        FrameBuf {
+        Ok(FrameBuf {
             planes,
             num_planes: self.num_planes,
             subsampling_x: self.subsampling_x,
@@ -155,7 +173,35 @@ impl FrameBuf {
             bit_depth: self.bit_depth,
             width: self.width,
             height: self.height,
+        })
+    }
+
+    /// The region of a frame of this geometry covering luma samples [x0, x1) x [y0, y1)
+    /// (chroma scaled down); the bounds are multiples of 8, or the allocated size.
+    pub fn region_like(&self, x0: usize, y0: usize, x1: usize, y1: usize) -> Result<FrameBuf> {
+        let mut planes: [Plane; 3] = Default::default();
+        for (p, pl) in planes.iter_mut().enumerate().take(self.num_planes) {
+            let (sx, sy) = if p == 0 { (0, 0) } else { (self.subsampling_x, self.subsampling_y) };
+            let full = &self.planes[p];
+            let (px0, py0) = (x0 >> sx, y0 >> sy);
+            let px1 = (x1 >> sx).min(full.stride);
+            let py1 = (y1 >> sy).min(full.rows);
+            *pl = Plane::region(
+                px0,
+                py0,
+                px1.checked_sub(px0).ok_or(Error::Invalid("tile bounds"))?,
+                py1.checked_sub(py0).ok_or(Error::Invalid("tile bounds"))?,
+            )?;
         }
+        Ok(FrameBuf {
+            planes,
+            num_planes: self.num_planes,
+            subsampling_x: self.subsampling_x,
+            subsampling_y: self.subsampling_y,
+            bit_depth: self.bit_depth,
+            width: self.width,
+            height: self.height,
+        })
     }
 
     pub fn plane_width(&self, plane: usize) -> usize {
@@ -220,42 +266,42 @@ pub struct MiInfo {
 impl MiInfo {
     /// `palette`: whether palette mode can occur (allow_screen_content_tools); without it the
     /// palette arrays (40 bytes per unit) stay empty.
-    pub fn new(cols: usize, rows: usize, palette: bool) -> MiInfo {
+    pub fn new(cols: usize, rows: usize, palette: bool) -> Result<MiInfo> {
         MiInfo::region(cols, rows, 0, 0, cols, rows, palette)
     }
 
     /// Storage for the w x h mode info units at (ox, oy) of a cols x rows frame.
-    pub fn region(cols: usize, rows: usize, ox: usize, oy: usize, w: usize, h: usize, palette: bool) -> MiInfo {
-        let n = w * h;
+    pub fn region(cols: usize, rows: usize, ox: usize, oy: usize, w: usize, h: usize, palette: bool) -> Result<MiInfo> {
+        let n = w.checked_mul(h).ok_or(Error::AllocationFailed)?;
         let np = if palette { n } else { 0 };
-        MiInfo {
+        Ok(MiInfo {
             cols,
             rows,
             ox,
             oy,
             stride: w,
             region_rows: h,
-            y_mode: vec![0; n],
-            uv_mode: vec![0; n],
-            ref_frame: vec![[0, -1]; n],
-            mv: vec![[Mv::ZERO; 2]; n],
-            is_inter: vec![false; n],
-            skip_mode: vec![false; n],
-            skip: vec![false; n],
-            tx_size: vec![0; n],
-            inter_tx_size: vec![0; n],
-            mi_size: vec![0; n],
-            segment_id: vec![0; n],
-            palette_size: [vec![0; np], vec![0; np]],
-            palette_colors: [vec![[0; 8]; np], vec![[0; 8]; np]],
-            delta_lf: vec![[0; 4]; n],
-            comp_group_idx: vec![0; n],
-            compound_idx: vec![0; n],
-            interp_filter: vec![[0; 2]; n],
-            motion_mode: vec![0; n],
-            tx_type: vec![0; n],
-            written: vec![false; n],
-        }
+            y_mode: allocate(0, n)?,
+            uv_mode: allocate(0, n)?,
+            ref_frame: allocate([0, -1], n)?,
+            mv: allocate([Mv::ZERO; 2], n)?,
+            is_inter: allocate(false, n)?,
+            skip_mode: allocate(false, n)?,
+            skip: allocate(false, n)?,
+            tx_size: allocate(0, n)?,
+            inter_tx_size: allocate(0, n)?,
+            mi_size: allocate(0, n)?,
+            segment_id: allocate(0, n)?,
+            palette_size: [allocate(0, np)?, allocate(0, np)?],
+            palette_colors: [allocate([0; 8], np)?, allocate([0; 8], np)?],
+            delta_lf: allocate([0; 4], n)?,
+            comp_group_idx: allocate(0, n)?,
+            compound_idx: allocate(0, n)?,
+            interp_filter: allocate([0; 2], n)?,
+            motion_mode: allocate(0, n)?,
+            tx_type: allocate(0, n)?,
+            written: allocate(false, n)?,
+        })
     }
 
     #[inline(always)]

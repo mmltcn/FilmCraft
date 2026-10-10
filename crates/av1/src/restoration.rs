@@ -5,10 +5,10 @@ use crate::spec_tables::*;
 use crate::state::FrameState;
 
 /// Upscale a frame horizontally from FrameWidth to UpscaledWidth (7.16).
-pub(crate) fn upscale(fs: &FrameState, input: &FrameBuf) -> FrameBuf {
+pub(crate) fn upscale(fs: &FrameState, input: &FrameBuf) -> crate::Result<FrameBuf> {
     let fh = &fs.fh;
     let up_w = fh.upscaled_width as usize;
-    let mut out = FrameBuf::new(up_w, fh.frame_height as usize, fs.num_planes, fs.ssx, fs.ssy, fs.bit_depth as u8);
+    let mut out = FrameBuf::new(up_w, fh.frame_height as usize, fs.num_planes, fs.ssx, fs.ssy, fs.bit_depth as u8)?;
     let max = (1i32 << fs.bit_depth) - 1;
     for plane in 0..fs.num_planes {
         let (sub_x, sub_y) = if plane > 0 { (fs.ssx, fs.ssy) } else { (0, 0) };
@@ -39,7 +39,7 @@ pub(crate) fn upscale(fs: &FrameState, input: &FrameBuf) -> FrameBuf {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 struct LrCtx<'a> {
@@ -70,9 +70,9 @@ impl LrCtx<'_> {
 }
 
 /// Loop restoration (7.17): returns LrFrame given UpscaledCurrFrame and UpscaledCdefFrame.
-pub(crate) fn loop_restoration(fs: &FrameState, cur: &FrameBuf, cdef: &FrameBuf) -> FrameBuf {
+pub(crate) fn loop_restoration(fs: &FrameState, cur: &FrameBuf, cdef: &FrameBuf) -> crate::Result<FrameBuf> {
     let fh = &fs.fh;
-    let mut lr = cdef.clone();
+    let mut lr = cdef.try_clone()?;
     let up_w = fh.upscaled_width as i32;
     let fr_h = fh.frame_height as i32;
     let bd = fs.bit_depth;
@@ -115,7 +115,7 @@ pub(crate) fn loop_restoration(fs: &FrameState, cur: &FrameBuf, cdef: &FrameBuf)
             row += 1;
         }
     }
-    lr
+    Ok(lr)
 }
 
 #[allow(clippy::too_many_arguments)]

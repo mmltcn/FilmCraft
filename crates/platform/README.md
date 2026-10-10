@@ -76,8 +76,18 @@ let availability = filmcraft_platform::register(); // Available("VideoToolbox") 
   It declines two-pass VBR, HDR, MXF, interlaced output, sizes outside NVENC's limits and systems
   without an NVIDIA GPU or driver, and the software encoder runs instead. A failure during an export
   ends it with an error, since a hardware stream cannot be finished in software. The same session,
-  ring and input path encode H.265, see [Hardware H.265 (HEVC) encoding (Windows,
+  ring and input path encode H.265 and AV1, see [Hardware H.265 (HEVC) encoding (Windows,
   NVENC)](#hardware-h265-hevc-encoding-windows-nvenc).
+
+- **Windows NVENC AV1** uses API 12.1's AV1 configuration with Main 8-bit (RGBA/NV12 input)
+  and Main 10 (P010 input), repeated sequence headers at keyframes, and an `av1C`
+  record parsed from the actual sequence header. Main 10 signals the selected
+  primaries, transfer and matrix; static HDR mastering-display and content-light
+  metadata are AV1 metadata OBUs with the specification's RGB order and binary
+  fixed-point units. AV1 export requires a capable GPU:
+  there is no built-in software encoder. Regression tests
+  cover decoded picture content, keyframe spacing, 10-bit color signaling and HDR
+  metadata read by an external oracle.
 - **Linux: NVDEC, H.264 (`avcC`) and HEVC (`hvcC`)** on NVIDIA's proprietary driver (`nvdec/`): H.264
   8-bit and HEVC 8- / 10-bit, 4:2:0 progressive. `libnvcuvid.so.1` and `libcuda.so.1` are loaded at
   run time; without them (or without a device) nothing is registered. NVIDIA's own parser takes the
@@ -344,7 +354,7 @@ Zero-copy upload of decoded pictures into wgpu textures (`CVPixelBuffer`s on mac
 textures on Windows); B-frames in the VideoToolbox encoders and 10-bit / HDR HEVC (Main 10) in
 VideoToolbox; VP9 and AV1 through VA-API (Linux), and VA-API encoding; field-coded H.264; 4:4:4 and 4:2:2 encoding with NVENC, HDR
 H.264 with NVENC (HDR H.264 stays with the software encoder), HDR10 MaxCLL / MaxFALL measured from
-the pictures (they are written as 0, unknown), AV1 with NVENC, H.265 with the other Windows vendors and on Linux, and encoders
+the pictures (they are written as 0, unknown), AV1 with NVENC on Linux, H.265 with the other Windows vendors and on Linux, and encoders
 from other vendors on Windows (through Media Foundation); VP9 / AV1 4:4:4 and 12-bit on Windows.
 
 ### Linux NVENC sources and limits

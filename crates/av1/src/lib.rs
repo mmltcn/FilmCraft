@@ -41,6 +41,10 @@ pub enum Error {
     Invalid(&'static str),
     #[error("unsupported AV1 feature: {0}")]
     Unsupported(&'static str),
+    #[error("AV1 decoding worker failed")]
+    WorkerFailed,
+    #[error("AV1 frame allocation failed")]
+    AllocationFailed,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
