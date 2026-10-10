@@ -53,6 +53,7 @@ and `filmcraft-cli`.
 | `dnx` | L0 | DNxHD / DNxHR (SMPTE ST 2019-1 VC-3) decoder and DNxHR encoder |
 | `apv` | L0 | Advanced Professional Video (IETF RFC 9924) decoder and encoder ([README](../crates/apv/README.md)) |
 | `av1` | L0 | AV1 decoder (Main profile; bit-exact with libdav1d; see its README for the stage table) |
+| `av1enc` | L0 | Reserved software AV1 encoder API (unsupported); uncompiled prototype for review |
 | `mpeg2v` | L0 | MPEG-2 video (Main / 4:2:2 profile; frame and field pictures, dual prime) and MPEG-1 video decoder ([README](../crates/mpeg2v/README.md)) |
 | `aac` | L0 | AAC-LC decoder and encoder |
 | `ac3` | L0 | AC-3 (ATSC A/52) decoder ([README](../crates/ac3/README.md)) |
