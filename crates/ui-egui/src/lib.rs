@@ -40,6 +40,7 @@ pub mod frames;
 pub mod header;
 pub mod i18n;
 pub mod icons;
+mod icons_svg;
 pub mod links;
 pub mod menus;
 pub mod panels;
