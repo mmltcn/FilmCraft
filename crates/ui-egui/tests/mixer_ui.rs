@@ -290,6 +290,68 @@ fn clip_mixer_db_value_can_be_typed() {
     assert!((level + 20.0).abs() < 1e-6, "typed -20 dB into the clip mixer readout: {level}");
 }
 
+/// #817: a typed calculation, also one that starts with `*` or `/` and applies to the value.
+#[test]
+fn clip_mixer_db_value_takes_a_calculation() {
+    let mut d = Driver::demo();
+    d.ok("ui.panel.show", json!({"panel": "AudioClipMixer"}));
+    d.frames(3);
+    d.exec("playhead.set", json!({"seconds": 1.0}));
+    d.frames(2);
+    let level = |d: &mut Driver| -> f64 {
+        let seq = d.exec("sequence.inspect", json!({}));
+        let fx = &seq["audio"][0]["items"][0]["effects"];
+        let vol = fx.as_array().unwrap().iter().find(|e| e["effect"] == "volume").unwrap();
+        vol["params"]["level"]["value"].as_str().and_then(|v| v.strip_prefix("Float(")?.strip_suffix(')')?.parse().ok()).unwrap()
+    };
+    let enter = |d: &mut Driver, keys: &[&str], text: &str| {
+        d.click("clipMixer.A1.value");
+        d.frames(2);
+        for k in keys {
+            d.ok("ui.key", json!({"key": k}));
+        }
+        d.ok("ui.type", json!({"text": text}));
+        d.frames(2);
+        d.ok("ui.key", json!({"key": "Enter"}));
+        d.frames(3);
+    };
+    assert!((level(&mut d) + 8.0).abs() < 1e-6, "the demo's -8 dB");
+    // the value opens selected: `*2` replaces it and doubles it
+    enter(&mut d, &[], "*2");
+    assert!((level(&mut d) + 16.0).abs() < 1e-6, "{}", level(&mut d));
+    // added after the value: `-16.0/4`
+    enter(&mut d, &["End"], "/4");
+    assert!((level(&mut d) + 4.0).abs() < 1e-6, "{}", level(&mut d));
+    enter(&mut d, &[], "(1+2)*-3");
+    assert!((level(&mut d) + 9.0).abs() < 1e-6, "{}", level(&mut d));
+    // not a calculation: the value stays
+    enter(&mut d, &[], "2*");
+    assert!((level(&mut d) + 9.0).abs() < 1e-6, "{}", level(&mut d));
+}
+
+/// #817: the number fields of dialogs take calculations too.
+#[test]
+fn audio_gain_dialog_field_takes_a_calculation() {
+    let mut d = Driver::demo();
+    let seq = d.exec("sequence.inspect", json!({}));
+    let clip = seq["audio"][0]["items"][0]["clip"].as_u64().unwrap();
+    d.exec("timeline.select", json!({"clips": [clip]}));
+    let peak = |d: &mut Driver| d.exec("clip.audioPeak", json!({"clips": [clip]}))["peakDb"].as_f64().unwrap();
+    let before = peak(&mut d);
+    d.ok("ui.menu.invoke", json!({"id": "clip.audioGain"}));
+    d.frames(3);
+    d.click("audioGain.adjust");
+    d.click("audioGain.adjust.value");
+    d.frames(2);
+    d.ok("ui.key", json!({"key": "Cmd+A"}));
+    d.ok("ui.type", json!({"text": "1.5*2"}));
+    d.frames(2);
+    d.ok("ui.key", json!({"key": "Enter"}));
+    d.frames(2);
+    d.click("audioGain.ok");
+    assert!((peak(&mut d) - (before + 3.0)).abs() < 0.05, "3 dB louder: {before} -> {}", peak(&mut d));
+}
+
 #[test]
 fn audio_gain_dialog_normalizes_the_selection() {
     let mut d = Driver::demo();

@@ -149,7 +149,7 @@ pub fn show_dialog(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 }
                 ui.horizontal(|ui| {
                     ui.label(if pre == "merge" { tl!("Offset Audio by:") } else { tl!("Offset:") });
-                    let r = ui.add(egui::DragValue::new(&mut d.offset).range(-100_000..=100_000).suffix(tl!(" frames")));
+                    let r = ui.add(crate::widgets::number_drag(&mut d.offset).range(-100_000..=100_000).suffix(tl!(" frames")));
                     push(&mut elems, format!("{pre}.offset"), &r, "offset");
                 });
             });

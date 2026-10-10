@@ -50,11 +50,11 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             ProjectDialog::FreeformOptions { options } => {
                 egui::Grid::new("ff-options").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                     ui.label(tl!("Grid spacing:"));
-                    let r = ui.add(egui::DragValue::new(&mut options.grid).range(4.0..=200.0).suffix(" pt"));
+                    let r = ui.add(crate::widgets::number_drag(&mut options.grid).range(4.0..=200.0).suffix(" pt"));
                     push(app, "projectDialog.grid", &r, "Grid spacing");
                     ui.end_row();
                     ui.label(tl!("Default clip size:"));
-                    let r = ui.add(egui::DragValue::new(&mut options.card_size).range(48.0..=480.0).suffix(" pt"));
+                    let r = ui.add(crate::widgets::number_drag(&mut options.card_size).range(48.0..=480.0).suffix(" pt"));
                     push(app, "projectDialog.cardSize", &r, "Default clip size");
                     ui.end_row();
                 });

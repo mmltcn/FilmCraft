@@ -804,7 +804,7 @@ pub fn dialogs(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 });
                 ui.horizontal(|ui| {
                     ui.label(tl!("Position:"));
-                    let r = ui.add(egui::DragValue::new(position).speed(1.0).suffix(" px"));
+                    let r = ui.add(crate::widgets::number_drag(position).speed(1.0).suffix(" px"));
                     push(&mut elems, "guides.add.position", &r, "Position");
                 });
                 ui.horizontal(|ui| {

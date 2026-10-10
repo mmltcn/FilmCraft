@@ -418,7 +418,7 @@ fn device_opts(app: &mut FilmcraftApp, d: &mut SettingsDraft, list: DeviceList) 
 fn number(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, value: f64, range: (f64, f64), decimals: usize, label: &str) -> Option<f64> {
     let mut x = value;
     let speed = ((range.1 - range.0) / 2000.0).clamp(0.05, 1.0);
-    let dv = egui::DragValue::new(&mut x).range(range.0..=range.1).speed(speed).fixed_decimals(decimals);
+    let dv = crate::widgets::number_drag(&mut x).range(range.0..=range.1).speed(speed).fixed_decimals(decimals);
     let r = ui.add_sized(vec2(84.0, 24.0), dv);
     app.auto.add(&format!("settings.{key}"), r.rect, label);
     (r.changed() && x != value).then_some(x)

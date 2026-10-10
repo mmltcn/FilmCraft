@@ -439,8 +439,8 @@ pub fn template_controls(
             ControlKind::Position => {
                 let v = pv.and_then(|v| v.as_vec2()).unwrap_or_default();
                 let (mut x, mut y) = (v.x, v.y);
-                let rx = vui.add(egui::DragValue::new(&mut x).speed(1.0).prefix("X "));
-                let ry = vui.add(egui::DragValue::new(&mut y).speed(1.0).prefix("Y "));
+                let rx = vui.add(crate::widgets::number_drag(&mut x).speed(1.0).prefix("X "));
+                let ry = vui.add(crate::widgets::number_drag(&mut y).speed(1.0).prefix("Y "));
                 autos.push((format!("{id}.x"), rx.rect, c.name.clone()));
                 autos.push((format!("{id}.y"), ry.rect, c.name.clone()));
                 if rx.changed() || ry.changed() {
@@ -461,7 +461,7 @@ pub fn responsive_time(app: &FilmcraftApp, ui: &mut egui::Ui, clip: ClipId, it: 
     for (key, label, v) in [("intro", tl!("Intro Duration"), m.intro), ("outro", tl!("Outro Duration"), m.outro)] {
         let mut vui = row_label(ui, label, &t);
         let mut f = frames(v);
-        let r = vui.add(egui::DragValue::new(&mut f).speed(0.2).range(0.0..=100_000.0).suffix(" fr"));
+        let r = vui.add(crate::widgets::number_drag(&mut f).speed(0.2).range(0.0..=100_000.0).suffix(" fr"));
         autos.push((format!("graphics.time.{key}"), r.rect, label.into()));
         if r.changed() {
             actions.push(("graphics.setResponsiveTime".into(), json!({"clip": clip.0, format!("{key}Frames"): f.round()})));
@@ -506,7 +506,7 @@ pub fn responsive_time(app: &FilmcraftApp, ui: &mut egui::Ui, clip: ClipId, it: 
     ] {
         let mut vui = row_label(ui, label, &t);
         let mut f = frames(v);
-        let r = vui.add(egui::DragValue::new(&mut f).speed(0.2).range(0.0..=100_000.0).suffix(" fr"));
+        let r = vui.add(crate::widgets::number_drag(&mut f).speed(0.2).range(0.0..=100_000.0).suffix(" fr"));
         autos.push((format!("graphics.roll.{key}"), r.rect, label.into()));
         if r.changed() {
             actions.push(("graphics.setRoll".into(), json!({"clip": clip.0, format!("{key}Frames"): f.round()})));

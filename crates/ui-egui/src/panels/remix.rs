@@ -56,7 +56,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             ui.set_min_width(320.0);
             egui::Grid::new("remix-props").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                 ui.label(tl!("Target Duration:"));
-                let r = ui.add(egui::DragValue::new(&mut d.seconds).speed(0.1).range(1.0..=36_000.0).suffix(" s").max_decimals(2));
+                let r = ui.add(crate::widgets::number_drag(&mut d.seconds).speed(0.1).range(1.0..=36_000.0).suffix(" s").max_decimals(2));
                 elems.push(("remixProperties.duration".into(), r.rect, format!("{:.2} s", d.seconds)));
                 ui.end_row();
                 ui.label(tl!("Segments:"));

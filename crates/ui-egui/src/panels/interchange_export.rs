@@ -139,7 +139,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             elems.push((format!("{p}.trimAudio"), r.rect, d.trim.to_string()));
             ui.end_row();
             ui.label(tl!("Handle Frames:"));
-            let r = ui.add_enabled(d.trim && !linked, egui::DragValue::new(&mut d.handles).range(0..=10_000));
+            let r = ui.add_enabled(d.trim && !linked, crate::widgets::number_drag(&mut d.handles).range(0..=10_000));
             elems.push((format!("{p}.handles"), r.rect, d.handles.to_string()));
             ui.end_row();
             ui.label("");

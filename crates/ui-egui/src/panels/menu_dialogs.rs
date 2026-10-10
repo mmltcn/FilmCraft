@@ -385,7 +385,7 @@ fn number(ui: &mut egui::Ui, elems: &mut Elems, pre: &str, p: &mut Value, key: &
     ui.horizontal(|ui| {
         ui.label(label);
         let mut v = p.get(key).and_then(Value::as_f64).unwrap_or(0.0);
-        let r = ui.add(egui::DragValue::new(&mut v).range(range).suffix(suffix));
+        let r = ui.add(crate::widgets::number_drag(&mut v).range(range).suffix(suffix));
         push(elems, format!("{pre}.{key}"), &r, label);
         if r.changed() {
             p[key] = json!(v);
@@ -612,7 +612,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                                 ui.label(l);
                                 for (i, axis) in ["horizontal", "vertical"].iter().enumerate() {
                                     let mut v = p[k][i].as_f64().unwrap_or(0.0);
-                                    let r = ui.add(egui::DragValue::new(&mut v).range(0.0..=50.0).suffix(" %"));
+                                    let r = ui.add(crate::widgets::number_drag(&mut v).range(0.0..=50.0).suffix(" %"));
                                     push(&mut elems, format!("projectSettings.{k}.{axis}"), &r, format!("{l} {axis}"));
                                     p[k][i] = json!(v);
                                     ui.label(*axis);
