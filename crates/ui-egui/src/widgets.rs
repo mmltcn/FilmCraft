@@ -6,20 +6,37 @@ use filmcraft_time::{FrameRate, Tick, parse_timecode};
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
-/// Premiere "hot text": a blue number you drag horizontally to scrub, click to type.
-/// Returns (response, Some(new value) when changed).
+/// Premiere "hot text": a blue number you drag horizontally to scrub, click to type a number or a
+/// calculation ([`crate::calc`]). Returns (response, Some(new value) when changed).
 pub fn hot_number(ui: &mut Ui, id: egui::Id, value: f64, speed: f64, range: (f64, f64), decimals: usize, suffix: &str, t: &Tokens) -> (Response, Option<f64>) {
     let editing_id = id.with("editing");
+    let edit_id = id.with("edit");
+    let select_all_id = id.with("select-all");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
     if let Some(buf) = editing.as_mut() {
-        let r = ui.add(egui::TextEdit::singleline(buf).desired_width(56.0).font(Tokens::ui(12.0)));
+        let r = ui.add(egui::TextEdit::singleline(buf).id(edit_id).desired_width(56.0).font(Tokens::ui(12.0)));
         let mut out = None;
         if r.lost_focus() {
-            if let Ok(v) = buf.trim().trim_end_matches(suffix).trim().parse::<f64>() {
+            // the field's own unit can be typed anywhere; calc ignores the common ones
+            let typed = if suffix.trim().is_empty() { buf.clone() } else { buf.replace(suffix.trim(), "") };
+            if let Some(v) = crate::calc::eval(&typed, value) {
                 out = Some(v.clamp(range.0, range.1));
             }
             ui.data_mut(|d| d.remove::<String>(editing_id));
         } else {
+            // the whole value is selected once the field has focus, so a typed `*2` applies to it;
+            // the focus and the selection show on the next frame, which nothing else would trigger
+            let select_all = ui.data(|d| d.get_temp::<bool>(select_all_id)).is_some();
+            if select_all && r.has_focus() {
+                ui.data_mut(|d| d.remove::<bool>(select_all_id));
+                let mut st = egui::text_edit::TextEditState::load(ui.ctx(), edit_id).unwrap_or_default();
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(buf.chars().count()));
+                st.cursor.set_char_range(Some(all));
+                st.store(ui.ctx(), edit_id);
+            }
+            if select_all {
+                ui.ctx().request_repaint();
+            }
             let b = buf.clone();
             ui.data_mut(|d| d.insert_temp(editing_id, b));
             r.request_focus();
@@ -54,7 +71,10 @@ pub fn hot_number(ui: &mut Ui, id: egui::Id, value: f64, speed: f64, range: (f64
         }
     }
     if resp.clicked() {
-        ui.data_mut(|d| d.insert_temp(editing_id, format!("{value:.decimals$}")));
+        ui.data_mut(|d| {
+            d.insert_temp(editing_id, format!("{value:.decimals$}"));
+            d.insert_temp(select_all_id, true);
+        });
     }
     (resp, out)
 }
@@ -277,4 +297,11 @@ pub fn meter_bar(painter: &egui::Painter, rect: Rect, db: f32, peak_db: f32, t: 
         [pos2(rect.min.x, py), pos2(rect.max.x, py)],
         Stroke::new(1.0, if peak_db > -0.5 { t.danger } else { Color32::from_rgb(0xf0, 0xf0, 0x4f) }),
     );
+}
+
+/// An egui `DragValue` (the number fields of dialogs and Settings) that also takes a calculation
+/// ([`crate::calc`]) applied to the value it holds: `100*2`, or `*2` to double it.
+pub fn number_drag<Num: egui::emath::Numeric>(value: &mut Num) -> egui::DragValue<'_> {
+    let current = value.to_f64();
+    egui::DragValue::new(value).custom_parser(move |s| crate::calc::eval(s, current))
 }

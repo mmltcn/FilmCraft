@@ -288,11 +288,11 @@ fn settings_dialog(app: &mut FilmcraftApp, ctx: &egui::Context) {
             elems.push(("voiceover.countdown".into(), r.rect, "Countdown Sound Cues".into()));
             ui.end_row();
             ui.label(tl!("Pre-roll:"));
-            let r = ui.add(egui::DragValue::new(&mut d.prefs.preroll_seconds).speed(0.1).range(0.0..=60.0).suffix(tl!(" seconds")));
+            let r = ui.add(crate::widgets::number_drag(&mut d.prefs.preroll_seconds).speed(0.1).range(0.0..=60.0).suffix(tl!(" seconds")));
             elems.push(("voiceover.preroll".into(), r.rect, format!("{}", d.prefs.preroll_seconds)));
             ui.end_row();
             ui.label(tl!("Post-roll:"));
-            let r = ui.add(egui::DragValue::new(&mut d.prefs.postroll_seconds).speed(0.1).range(0.0..=60.0).suffix(tl!(" seconds")));
+            let r = ui.add(crate::widgets::number_drag(&mut d.prefs.postroll_seconds).speed(0.1).range(0.0..=60.0).suffix(tl!(" seconds")));
             elems.push(("voiceover.postroll".into(), r.rect, format!("{}", d.prefs.postroll_seconds)));
             ui.end_row();
         });

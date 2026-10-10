@@ -150,7 +150,7 @@ fn tracks(ui: &mut egui::Ui, d: &mut SequenceSettingsDraft, elems: &mut Elems) {
     for (id, label, n) in [("video", "Video:", &mut d.video_tracks), ("audio", "Audio:", &mut d.audio_tracks)] {
         ui.horizontal(|ui| {
             ui.label(t(label));
-            let r = ui.add(egui::DragValue::new(n).range(0..=256));
+            let r = ui.add(crate::widgets::number_drag(n).range(0..=256));
             elems.push((format!("sequenceSettings.tracks.{id}"), r.rect, n.to_string()));
             ui.label(tl!("tracks"));
         });
@@ -331,10 +331,10 @@ fn general(ui: &mut egui::Ui, d: &mut SequenceSettingsDraft, cur: &SequenceSetti
     });
     section(ui, "Video", |ui| {
         row(ui, label_w, "Frame Size:", true, |ui| {
-            let w = ui.add(egui::DragValue::new(&mut d.width).range(1..=filmcraft_project::MAX_FRAME_SIDE).speed(1.0));
+            let w = ui.add(crate::widgets::number_drag(&mut d.width).range(1..=filmcraft_project::MAX_FRAME_SIDE).speed(1.0));
             elems.push(("sequenceSettings.width".into(), w.rect, d.width.to_string()));
             ui.label(tl!("horizontal"));
-            let h = ui.add(egui::DragValue::new(&mut d.height).range(1..=filmcraft_project::MAX_FRAME_SIDE).speed(1.0));
+            let h = ui.add(crate::widgets::number_drag(&mut d.height).range(1..=filmcraft_project::MAX_FRAME_SIDE).speed(1.0));
             elems.push(("sequenceSettings.height".into(), h.rect, d.height.to_string()));
             ui.label(tl!("vertical"));
             // the display aspect: 1440 x 1080 with 4:3 pixels is 16:9

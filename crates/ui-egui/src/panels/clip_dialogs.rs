@@ -274,7 +274,7 @@ fn number(ui: &mut egui::Ui, elems: &mut Elems, pre: &str, p: &mut Value, key: &
     ui.horizontal(|ui| {
         ui.label(label);
         let mut v = p.get(key).and_then(Value::as_f64).unwrap_or(0.0);
-        let r = ui.add(egui::DragValue::new(&mut v).range(range).suffix(suffix));
+        let r = ui.add(crate::widgets::number_drag(&mut v).range(range).suffix(suffix));
         push(elems, format!("{pre}.{key}"), &r, label);
         if r.changed() {
             p[key] = json!(v);
@@ -286,7 +286,7 @@ fn frames(ui: &mut egui::Ui, elems: &mut Elems, pre: &str, p: &mut Value, key: &
     ui.horizontal(|ui| {
         ui.label(label);
         let mut v = p.get(key).and_then(Value::as_i64).unwrap_or(0);
-        let r = ui.add(egui::DragValue::new(&mut v).range(0..=i64::MAX / 4).suffix(" fr"));
+        let r = ui.add(crate::widgets::number_drag(&mut v).range(0..=i64::MAX / 4).suffix(" fr"));
         push(elems, format!("{pre}.{key}"), &r, label);
         if r.changed() {
             p[key] = json!(v);
@@ -421,7 +421,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                     ui.horizontal(|ui| {
                         ui.label(tl!("Number of Audio Clips:"));
                         let mut count = clips.len() as u32;
-                        let r = ui.add(egui::DragValue::new(&mut count).range(1..=n as u32));
+                        let r = ui.add(crate::widgets::number_drag(&mut count).range(1..=n as u32));
                         push(&mut elems, format!("{pre}.count"), &r, "Number of Audio Clips");
                         if r.changed() {
                             let count = count.max(1) as usize;

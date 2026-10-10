@@ -553,7 +553,7 @@ fn project_manager(app: &mut FilmcraftApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(d.mode == "consolidate", |ui| {
                     ui.label(tl!("Include Handles:"));
-                    let r = ui.add(egui::DragValue::new(&mut d.handles).range(0..=600).suffix(tl!(" frames")));
+                    let r = ui.add(crate::widgets::number_drag(&mut d.handles).range(0..=600).suffix(tl!(" frames")));
                     push(&mut elems, "pm.handles", &r, format!("{} frames", d.handles));
                 });
             });

@@ -127,7 +127,7 @@ fn audio_gain(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
                     if r.clicked() {
                         draft.mode = id.to_string();
                     }
-                    let f = ui.add_enabled(draft.mode == id, egui::DragValue::new(v).speed(0.1).range(-96.0..=96.0).suffix(" dB"));
+                    let f = ui.add_enabled(draft.mode == id, crate::widgets::number_drag(v).speed(0.1).range(-96.0..=96.0).suffix(" dB"));
                     elems.push((format!("audioGain.{id}.value"), f.rect, format!("{v:.1} dB")));
                     ui.end_row();
                 }
@@ -225,7 +225,7 @@ fn add_tracks(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         label(ui, tl!("Amount"));
-                        let r = ui.add(egui::DragValue::new(amount).range(0..=99).speed(0.1));
+                        let r = ui.add(crate::widgets::number_drag(amount).range(0..=99).speed(0.1));
                         elems.push((format!("addTracks.{kind}.amount"), r.rect, amount.to_string()));
                     });
                     ui.horizontal(|ui| {
