@@ -3487,6 +3487,7 @@
 	Click to select, or click in empty space and drag to marquee select. Use Shift, Alt, and Ctrl for other options.	クリックで選択します。何もない場所からドラッグすると範囲選択になります。Shift、Alt、Ctrl キーを併用すると、ほかのオプションも使えます。
 	Click to zoom in; Alt-click to zoom out.	クリックでズームイン、Alt+クリックでズームアウトします。
 	Drag: move · Alt-click: smooth/corner · Ctrl-click: delete	ドラッグ: 移動 · Alt+クリック: スムーズ/コーナー · Ctrl+クリック: 削除
+	Drag inward to round the corners	内側にドラッグして角を丸める
 	Include Alpha Channel	アルファチャンネルを含める
 	Sequence Settings	シーケンス設定
 	Color Management	カラーマネジメント

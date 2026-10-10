@@ -3471,6 +3471,7 @@
 	Click to select, or click in empty space and drag to marquee select. Use Shift, Alt, and Ctrl for other options.	单击以选择，或在空白处单击并拖动以框选。使用 Shift、Alt 和 Ctrl 进行其他操作。
 	Click to zoom in; Alt-click to zoom out.	单击以放大；Alt-单击以缩小。
 	Drag: move · Alt-click: smooth/corner · Ctrl-click: delete	拖动：移动 · Alt-单击：平滑/拐角 · Ctrl-单击：删除
+	Drag inward to round the corners	向内拖动以使拐角变圆
 	Include Alpha Channel	包含 Alpha 通道
 	Sequence Settings	序列设置
 	Color Management	色彩管理

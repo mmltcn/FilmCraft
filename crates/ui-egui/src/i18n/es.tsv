@@ -3488,6 +3488,7 @@
 	Click to select, or click in empty space and drag to marquee select. Use Shift, Alt, and Ctrl for other options.	Haz clic para seleccionar, o haz clic en un espacio vacío y arrastra para seleccionar con un marco. Usa Mayús, Alt y Ctrl para otras opciones.
 	Click to zoom in; Alt-click to zoom out.	Haz clic para acercar; Alt+clic para alejar.
 	Drag: move · Alt-click: smooth/corner · Ctrl-click: delete	Arrastrar: mover · Alt+clic: suave/esquina · Ctrl+clic: eliminar
+	Drag inward to round the corners	Arrastrar hacia dentro para redondear las esquinas
 	Include Alpha Channel	Incluir canal alfa
 	Sequence Settings	Ajustes de secuencia
 	Color Management	Gestión del color

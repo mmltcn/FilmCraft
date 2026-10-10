@@ -1,13 +1,13 @@
 //! Effect masks in the UI: the mask rows of Effect Controls (create ellipse / 4-point polygon /
 //! pen masks, per-mask Path / Feather / Opacity / Expansion / Inverted / mode) and on-monitor
-//! editing on the Program monitor (drag vertices, Bézier handles, the whole mask, feather and
-//! expansion handles; the pen places a free-draw Bézier mask).
+//! editing on the Program monitor (drag vertices, Bézier handles, the whole mask, feather,
+//! expansion and corner-roundness handles; the pen places a free-draw Bézier mask).
 //!
 //! Automation ids: `effectControls.<effect>.mask.{ellipse,polygon,pen}`,
 //! `effectControls.<effect>.mask<k>` (+ `.mode`, `.inverted`, `.delete`, and the parameter rows
 //! `effectControls.<effect>.mask<k>.<param>.*`), `program.mask.vertex.<i>`, `program.mask.in.<i>`,
 //! `program.mask.out.<i>`, `program.mask.body`, `program.mask.feather`, `program.mask.expansion`,
-//! `program.maskPen`.
+//! `program.mask.roundness`, `program.maskPen`.
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use filmcraft_geom::{Affine, Vec2};
@@ -344,6 +344,8 @@ pub fn monitor_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, fra
             }
         }
     }
+    // ---- corner roundness (masks with sharp corners: rectangles, polygons)
+    actions.extend(roundness_handle(app, ui, &painter, &path, &to_screen, &target));
     // ---- tangent handles and vertices
     let sel_v_id = egui::Id::new(("mask-sel-vertex", sel.clip.0, sel.effect, sel.mask));
     let sel_v: Option<usize> = ui.data(|d| d.get_temp(sel_v_id));
@@ -434,6 +436,121 @@ fn seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let l2 = ab.length_sq();
     let t = if l2 > 0.0 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
     (p - (a + ab * t)).length()
+}
+
+/// A sharp corner `masks.roundCorners` can fillet: its point, the unit bisector pointing to the
+/// fillet's centre, `sin(θ/2)` of its opening angle θ, and the largest radius it takes (the fillet
+/// never uses more than half of either edge).
+struct RoundableCorner {
+    p: Vec2,
+    bisector: Vec2,
+    sin_half: f64,
+    max_radius: f64,
+}
+
+/// The corners of `path` that rounding changes (degenerate ones — straight, reversing, zero-length
+/// edges — are left out).
+fn roundable_corners(path: &MaskPath) -> Vec<RoundableCorner> {
+    let n = path.vertices.len();
+    path.roundable_corners()
+        .into_iter()
+        .filter_map(|i| {
+            let v = path.vertices.get(i)?.p;
+            let prev = path.vertices.get((i + n - 1) % n)?.p;
+            let next = path.vertices.get((i + 1) % n)?.p;
+            let (a, b) = (prev - v, next - v);
+            let (la, lb) = (a.length(), b.length());
+            if !(la > 1e-6 && lb > 1e-6) {
+                return None;
+            }
+            let (u, w) = (a * (1.0 / la), b * (1.0 / lb));
+            let theta = (u.x * w.x + u.y * w.y).clamp(-1.0, 1.0).acos();
+            if !(1e-6..std::f64::consts::PI - 1e-6).contains(&theta) {
+                return None;
+            }
+            let s = u + w;
+            let sl = s.length();
+            if !sl.is_finite() || sl <= 1e-9 {
+                return None;
+            }
+            let half = theta / 2.0;
+            let max_radius = la.min(lb) / 2.0 * half.tan();
+            max_radius.is_finite().then_some(RoundableCorner { p: v, bisector: s * (1.0 / sl), sin_half: half.sin(), max_radius })
+        })
+        .collect()
+}
+
+/// Radius of a roundness drag that has moved `dist` clip pixels along the corner's bisector: the
+/// handle follows the fillet's centre, so it sits `r / sin(θ/2)` from the corner.
+fn drag_radius(dist: f64, c: &RoundableCorner, max_radius: f64) -> f64 {
+    let r = dist * c.sin_half;
+    if r.is_finite() { r.clamp(0.0, max_radius.max(0.0)) } else { 0.0 }
+}
+
+/// The corner-roundness handle of the selected mask, just inside its top-left sharp corner.
+/// Dragging it into the shape previews the rounded corners live; releasing rounds every sharp
+/// corner with one `masks.roundCorners` (one undo step per drag). Masks without a sharp corner
+/// between straight edges (ellipses, pen masks, corners already rounded) show no handle.
+fn roundness_handle(
+    app: &mut FilmcraftApp,
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    path: &MaskPath,
+    to_screen: &Affine,
+    target: &Value,
+) -> Option<(String, Value)> {
+    let corners = roundable_corners(path);
+    let to_clip = to_screen.inverse()?;
+    let lin_inv = Affine { e: 0.0, f: 0.0, ..to_clip };
+    let c = corners.iter().min_by(|a, b| {
+        let (pa, pb) = (sp(to_screen, a.p), sp(to_screen, b.p));
+        (pa.x + pa.y).total_cmp(&(pb.x + pb.y))
+    })?;
+    let max_radius = corners.iter().map(|c| c.max_radius).fold(0.0, f64::max);
+    let id = egui::Id::new("mask-roundness");
+    let dist_id = id.with("dist");
+    let dragging = ui.ctx().is_being_dragged(id);
+    let dist: f64 = if dragging { ui.data(|d| d.get_temp(dist_id)).unwrap_or(0.0) } else { 0.0 };
+    let radius = drag_radius(dist, c, max_radius);
+    let anchor = sp(to_screen, c.p);
+    let dir = sp(to_screen, c.p + c.bisector) - anchor;
+    let dir = if dir.length() > 1e-6 { dir.normalized() } else { egui::Vec2::new(1.0, 1.0).normalized() };
+    let hp = sp(to_screen, c.p + c.bisector * (radius / c.sin_half.max(1e-9))) + dir * 18.0;
+    let hr = Rect::from_center_size(hp, vec2(9.0, 9.0));
+    let r = ui.interact(hr.expand(3.0), id, Sense::drag()).on_hover_text(tl!("Drag inward to round the corners"));
+    app.auto.add("program.mask.roundness", hr, "Mask corner roundness");
+    let col = Color32::from_rgb(0x5a, 0xb4, 0xff);
+    if dragging && radius > 0.0 {
+        let preview = path.with_rounded_corners(radius, &path.roundable_corners()).flatten(0.5);
+        painter.add(egui::Shape::closed_line(preview.iter().map(|v| sp(to_screen, *v)).collect(), Stroke::new(1.5, Color32::WHITE)));
+        painter.text(hp + vec2(10.0, -10.0), Align2::LEFT_BOTTOM, format!("{radius:.1}"), Tokens::ui(10.5), app.tokens.hot_text);
+    }
+    painter.line_segment([anchor, hp], Stroke::new(1.0, col.gamma_multiply(0.6)));
+    painter.circle_filled(hp, 4.0, Color32::WHITE);
+    painter.circle_stroke(hp, 4.0, Stroke::new(1.5, col));
+    let primary = egui::PointerButton::Primary;
+    if r.drag_started_by(primary) {
+        ui.data_mut(|d| d.insert_temp(dist_id, 0.0_f64));
+    }
+    if r.dragged_by(primary) && r.drag_delta() != egui::Vec2::ZERO {
+        let d = lin_inv.apply(Vec2::new(r.drag_delta().x as f64, r.drag_delta().y as f64));
+        let along = d.x * c.bisector.x + d.y * c.bisector.y;
+        // accumulate the raw distance: past the limit the handle waits for the pointer to come back
+        let total = ui.data(|m| m.get_temp::<f64>(dist_id)).unwrap_or(0.0) + along;
+        ui.data_mut(|m| m.insert_temp(dist_id, if total.is_finite() { total } else { 0.0 }));
+    }
+    if r.drag_stopped_by(primary) {
+        let dist: f64 = ui.data_mut(|d| d.remove_temp(dist_id)).unwrap_or(0.0);
+        let radius = (drag_radius(dist, c, max_radius) * 10.0).round() / 10.0;
+        if radius > 0.0 {
+            let mut p = target.clone();
+            if let Some(o) = p.as_object_mut() {
+                o.insert("radius".into(), json!(radius));
+            }
+            return Some(("masks.roundCorners".into(), p));
+        }
+    }
+    None
 }
 
 /// Draft vertices → a mask path.

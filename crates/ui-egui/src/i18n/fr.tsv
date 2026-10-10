@@ -3478,6 +3478,7 @@
 	Click to select, or click in empty space and drag to marquee select. Use Shift, Alt, and Ctrl for other options.	Cliquez pour sélectionner, ou cliquez dans un espace vide et faites glisser pour sélectionner par rectangle. Utilisez Maj, Alt et Ctrl pour d'autres options.
 	Click to zoom in; Alt-click to zoom out.	Cliquez pour un zoom avant ; Alt+clic pour un zoom arrière.
 	Drag: move · Alt-click: smooth/corner · Ctrl-click: delete	Glisser : déplacer · Alt+clic : lisse/angle · Ctrl+clic : supprimer
+	Drag inward to round the corners	Glisser vers l'intérieur pour arrondir les angles
 	Include Alpha Channel	Inclure la couche alpha
 	Sequence Settings	Paramètres de séquence
 	Color Management	Gestion des couleurs
