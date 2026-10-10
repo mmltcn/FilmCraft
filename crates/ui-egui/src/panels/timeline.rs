@@ -627,6 +627,26 @@ fn empty_state(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     {
         let _ = app.session.execute("file.newSequence", json!({"fromItem": item.0}));
     }
+    // OS files dropped on an empty Timeline: import already happened; create a sequence from the first item
+    if let Some((items, p)) = app.pending_timeline_drop.clone()
+        && rect.contains(p)
+        && let Some((first, rest)) = items.split_first()
+    {
+        app.pending_timeline_drop = None;
+        if let Err(e) = app.session.execute("file.newSequence", json!({"fromItem": first.0})) {
+            app.ui.status = e.to_string();
+        } else {
+            let mut t = app.session.project.item(*first).map(|i| i.duration()).unwrap_or(Tick::ZERO);
+            for item in rest {
+                let params = json!({"item": item.0, "time": t.0, "insert": false});
+                if let Err(e) = app.session.execute("timeline.place", params) {
+                    app.ui.status = e.to_string();
+                } else {
+                    t = Tick(t.0.saturating_add(app.session.project.item(*item).map(|i| i.duration().0.max(0)).unwrap_or(0)));
+                }
+            }
+        }
+    }
 }
 
 /// The through-edit mark: two small triangles pointing at the cut, centred on the track, with a

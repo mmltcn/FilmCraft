@@ -143,6 +143,43 @@ fn tone_dropped_on_a_video_row_goes_to_the_audio_track_without_error() {
     assert_eq!(clip_counts(&h), (0, 1), "status: {}", h.state().ui.status);
 }
 
+/// Empty project: no sequence yet. Dropping on the empty Timeline must import *and* make a sequence.
+fn empty_harness() -> Harness<'static, FilmcraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).build_eframe(move |_cc| FilmcraftApp::new(Session::default()));
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    h
+}
+
+fn drop_on_empty_timeline(h: &mut Harness<'static, FilmcraftApp>, path: &Path) {
+    let panel = control_rect(h, "panel.Timeline");
+    pointer_to(h, panel.center());
+    h.input_mut().dropped_files.push(std::sync::Arc::new(OsFile(path.to_path_buf())));
+    step(h);
+    h.input_mut().dropped_files.clear();
+    step(h);
+}
+
+#[test]
+fn still_dropped_on_empty_timeline_creates_a_sequence() {
+    let mut h = empty_harness();
+    assert!(h.state().session.active_sequence().is_none());
+    drop_on_empty_timeline(&mut h, &still("drop_still_empty_timeline.png"));
+    assert_eq!(h.state().session.project.items.len(), 2, "still plus the new sequence");
+    assert!(h.state().session.active_sequence().is_some(), "status: {}", h.state().ui.status);
+    assert_eq!(clip_counts(&h), (1, 0), "status: {}", h.state().ui.status);
+}
+
+#[test]
+fn with_drop_import_off_empty_timeline_does_not_create_a_sequence() {
+    let mut h = empty_harness();
+    h.state_mut().session.prefs.timeline.drop_import_to_timeline = false;
+    drop_on_empty_timeline(&mut h, &still("drop_still_empty_pref_off.png"));
+    assert_eq!(h.state().session.project.items.len(), 1, "imported to the bin only");
+    assert!(h.state().session.active_sequence().is_none());
+}
+
 #[test]
 fn with_drop_import_off_the_file_is_only_imported() {
     let mut h = harness();
