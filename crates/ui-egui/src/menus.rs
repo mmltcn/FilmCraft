@@ -510,8 +510,9 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             return Ok(json!({"dialog": "revert"}));
         }
         // Files or an image on the system clipboard paste into the Timeline, or import into the
-        // Project panel (#611). Copying clips puts their names there as text, so media on the
-        // clipboard was copied after them; without media, Paste pastes the copied clips.
+        // Project panel (#611). Copying clips puts their names there as text, so media copied
+        // *after* them still wins; media that was already there when Copy/Cut ran is ignored so
+        // Paste of cut/copied clips still works (#697).
         "edit.paste" | "edit.pasteInsert"
             if params.as_object().is_none_or(|m| m.is_empty()) && matches!(app.ui.focused, PanelKind::Timeline | PanelKind::Project) =>
         {
@@ -556,9 +557,30 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         app.ui.status = e.clone();
     }
     if r.is_ok() && matches!(id, "edit.copy" | "edit.cut") {
+        remember_stale_clipboard_media(app);
         put_clip_names_on_system_clipboard(app, ctx);
     }
     r
+}
+
+/// Snapshot OS files/image present at Copy/Cut. Many platforms keep a previous file list after
+/// `copy_text`, so Paste would otherwise import those files instead of the clips (#697).
+fn remember_stale_clipboard_media(app: &mut FilmcraftApp) {
+    app.stale_clipboard_media = app.hooks.clipboard_media.as_mut().and_then(|f| f()).as_ref().map(clipboard_media_key);
+}
+
+fn clipboard_media_key(media: &crate::ClipboardMedia) -> String {
+    match media {
+        crate::ClipboardMedia::Files(paths) => format!("files:{}", paths.join("\0")),
+        crate::ClipboardMedia::Image { width, height, rgba } => {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in rgba {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+            format!("img:{width}x{height}:{h}")
+        }
+    }
 }
 
 /// Copied clips live in the session, but on Windows and Linux Ctrl+V only reaches the app when the
@@ -578,6 +600,9 @@ fn put_clip_names_on_system_clipboard(app: &FilmcraftApp, ctx: &egui::Context) {
 /// imported into the shown bin in the Project panel. None when the clipboard holds neither.
 fn paste_clipboard_media(app: &mut FilmcraftApp, insert: bool) -> Option<Result<Value, String>> {
     let media = (app.hooks.clipboard_media.as_mut()?)()?;
+    if app.stale_clipboard_media.as_ref() == Some(&clipboard_media_key(&media)) {
+        return None;
+    }
     let paths = match media {
         crate::ClipboardMedia::Files(paths) => paths,
         crate::ClipboardMedia::Image { width, height, rgba } => match encode_png(width, height, rgba)

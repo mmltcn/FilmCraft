@@ -322,6 +322,9 @@ pub struct FilmcraftApp {
     pub command_inbox: Option<Receiver<String>>,
     /// A V key press (or a Ctrl+V paste) reached the app and its release hasn't yet.
     v_down: bool,
+    /// OS files/image that were already on the clipboard when the last Copy/Cut ran. Paste ignores
+    /// that same media so it pastes the copied clips instead (#697).
+    pub(crate) stale_clipboard_media: Option<String>,
     /// GPU compositor (when running on wgpu): device state + compositor + the egui texture it feeds.
     pub gpu: Option<GpuState>,
     /// Preview render job being watched (job id, where to start playing when it completes).
@@ -535,6 +538,7 @@ impl FilmcraftApp {
             tl: Default::default(),
             command_inbox: None,
             v_down: false,
+            stale_clipboard_media: None,
             gpu: None,
             watched_render: None,
             applied_prefs: None,
