@@ -56,7 +56,7 @@ only). "Tested" names the evidence.
 | WebP | — | yes | no | ahead |
 | **PSD** (layers as sequence) | read (layered) | no | — | 0% |
 | **OpenEXR** | read + write | no | sequences (half float, linear RGB / premultiplied RGBA, uncompressed; #806) | 35% |
-| **DPX** | read + write | yes: luma / RGB / RGBA, 8–16-bit, filled 10/12-bit, either byte order (#821); no packed 10/12-bit, RLE or Y'CbCr | sequences (10-bit RGB, BT.709; #779) | 80% |
+| **DPX** | read + write | yes: luma / RGB / RGBA, 8–16-bit, filled 10/12-bit, either byte order (#821); packed 10/12-bit, Y'CbCr 4:2:2 / 4:4:4 with or without alpha (#841); no RLE | sequences (10-bit RGB, BT.709; #779) | 90% |
 | Targa | read + write | yes: every image type, RLE, colour maps, 15–32-bit (#821) | sequences (24-bit, 32-bit with alpha; #779) | 95% |
 | HEIF / HEIC | read | no | — | 0% |
 | Radiance HDR, AI / EPS, ICO, PTL | read | no | — | 0% |
