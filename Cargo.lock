@@ -1797,6 +1797,7 @@ dependencies = [
  "filmcraft-platform",
  "filmcraft-project",
  "filmcraft-render",
+ "filmcraft-testkit",
  "filmcraft-time",
  "serde_json",
  "tokio",
