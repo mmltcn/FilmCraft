@@ -411,6 +411,35 @@ pub(crate) fn slip_together(q: &mut filmcraft_project::Sequence, ctx: &mut edit:
     Ok(())
 }
 
+/// Clips an audio effect should land on: audio ids as given, plus the linked audio of any video
+/// clip in the list (so applying Parametric EQ to an A/V pair hits the sound).
+pub fn audio_effect_targets(s: &Session, clips: &[ClipId]) -> Vec<ClipId> {
+    let Some(seq) = s.active_sequence() else { return clips.to_vec() };
+    let mut out = Vec::new();
+    for c in clips {
+        let Some((tid, it)) = seq.find_item(*c) else { continue };
+        let kind = seq.track(tid).map(|t| t.kind);
+        if kind == Some(TrackKind::Audio) {
+            if !out.contains(c) {
+                out.push(*c);
+            }
+            continue;
+        }
+        if kind != Some(TrackKind::Video) {
+            continue;
+        }
+        let Some(link) = it.link else { continue };
+        for t in &seq.audio_tracks {
+            for i in &t.items {
+                if i.link == Some(link) && !out.contains(&i.id) {
+                    out.push(i.id);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Expand a clip selection with linked partners (when linked selection is on).
 pub fn with_links(s: &Session, clips: &[ClipId]) -> Vec<ClipId> {
     let Some(seq) = s.active_sequence() else { return clips.to_vec() };
@@ -2558,6 +2587,12 @@ fn build() -> Vec<CommandSpec> {
                 return Err(bad("effects.apply", "select clips first"));
             }
             let is_audio = def.kind == filmcraft_project::EffectKind::Audio;
+            // Audio effects belong on audio clips. A video clip in an A/V pair is retargeted to
+            // its linked audio so double-click / drop on the picture still applies Parametric EQ.
+            let clips = if is_audio { audio_effect_targets(s, &clips) } else { clips };
+            if clips.is_empty() {
+                return Err(bad("effects.apply", "audio effects need an audio clip (or a video clip with linked audio)"));
+            }
             let (fw, fh) = s.active_sequence().map(|q| (q.settings.width, q.settings.height)).unwrap_or((1920, 1080));
             let label = format!("Apply {}", def.name);
             s.edit_sequence(&label, |q, _, _| {

@@ -62,7 +62,8 @@ fn selected_clip(app: &FilmcraftApp) -> Option<(ClipId, TrackItem, TrackKind)> {
     selected_clips(app).into_iter().next()
 }
 
-/// The selected clip (video first) and, for a video clip, the selected audio linked to it.
+/// The selected clip (video first) and the audio linked to it when that audio is selected or
+/// linked selection is on — so clip audio FX (Parametric EQ, Custom Setup) stay visible on A/V pairs.
 fn selected_clips(app: &FilmcraftApp) -> Vec<(ClipId, TrackItem, TrackKind)> {
     let Some(seq) = app.session.active_sequence() else { return Vec::new() };
     let picked: Vec<(ClipId, &TrackItem, TrackKind)> = app
@@ -77,10 +78,19 @@ fn selected_clips(app: &FilmcraftApp) -> Vec<(ClipId, TrackItem, TrackKind)> {
         .collect();
     let Some(&(clip, it, kind)) = picked.iter().find(|p| p.2 == TrackKind::Video).or(picked.first()) else { return Vec::new() };
     let mut out = vec![(clip, it.clone(), kind)];
-    if kind == TrackKind::Video
-        && let Some(&(ac, ai, ak)) = picked.iter().find(|p| p.2 == TrackKind::Audio && p.1.link.is_some() && p.1.link == it.link)
-    {
-        out.push((ac, ai.clone(), ak));
+    if kind == TrackKind::Video {
+        let linked = picked.iter().find(|p| p.2 == TrackKind::Audio && p.1.link.is_some() && p.1.link == it.link).copied().or_else(|| {
+            if !app.session.state.linked_selection {
+                return None;
+            }
+            let link = it.link?;
+            seq.audio_tracks.iter().find_map(|t| {
+                t.items.iter().find(|i| i.link == Some(link)).map(|i| (i.id, i, TrackKind::Audio))
+            })
+        });
+        if let Some((ac, ai, ak)) = linked {
+            out.push((ac, ai.clone(), ak));
+        }
     }
     out
 }
