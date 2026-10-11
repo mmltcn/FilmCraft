@@ -70,9 +70,10 @@ impl From<CodecError> for filmcraft_media::MediaError {
 }
 
 /// Our own (pure-Rust) decoders, in the order they are tried.
-const BUILTIN_FACTORIES: [VideoDecoderFactory; 9] = [
+const BUILTIN_FACTORIES: [VideoDecoderFactory; 10] = [
     video::h264_factory,
     video::hevc_factory,
+    video::vp8_factory,
     video::vp9_factory,
     video::av1_factory,
     video::apv_factory,

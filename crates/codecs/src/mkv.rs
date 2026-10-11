@@ -58,7 +58,7 @@ pub struct MkvSource {
     /// Video codec as an ISO-BMFF sample entry (for the decoder factories).
     ventry: Option<SampleEntry>,
     video: GopCache,
-    /// The alpha layer of a VP9 track with `AlphaMode` 1 (WebM transparency, #402).
+    /// The alpha layer of a VP8 / VP9 track with `AlphaMode` 1 (WebM transparency, #402).
     alpha: Option<Arc<crate::webm_alpha::AlphaLayer>>,
     /// The playable audio tracks in file order: `info.audio_streams[k]` describes `audios[k]`.
     audios: Vec<MkvAudio>,
@@ -232,6 +232,7 @@ fn vp9_config(private: &[u8], v: Option<&filmcraft_matroska::VideoInfo>) -> VpcC
 
 fn sample_entry(c: &Codec, private: &[u8], v: Option<&filmcraft_matroska::VideoInfo>, w: u16, h: u16) -> Option<SampleEntry> {
     Some(match c {
+        Codec::Vp8 => SampleEntry::video(FourCc(*b"vp08"), CodecConfig::Unknown { fourcc: FourCc(*b"vp08"), raw: Vec::new() }, w, h),
         Codec::Vp9 { private } => SampleEntry::video(FourCc(*b"vp09"), CodecConfig::Vp9(vp9_config(private, v)), w, h),
         Codec::Av1 { av1c } => SampleEntry::video(FourCc(*b"av01"), CodecConfig::Av1(filmcraft_isobmff::Av1Config::parse(av1c).unwrap_or_default()), w, h),
         Codec::Apv { apvc } => SampleEntry::apv(filmcraft_isobmff::ApvConfig::parse(apvc).unwrap_or_default(), w, h),
@@ -429,9 +430,11 @@ impl MkvSource {
                 Some(MkvAudio { track: i, state, starts, preroll })
             })
             .collect();
-        // WebM transparency: VP9 alpha in each block's BlockAdditional (ID 1)
+        // WebM transparency: VP8 / VP9 alpha in each block's BlockAdditional (ID 1)
         let alpha = vtrack.and_then(|i| file.tracks.get(i)).filter(|t| {
-            matches!(t.codec, Codec::Vp9 { .. }) && t.video.as_ref().is_some_and(|v| v.alpha_mode != 0) && t.samples.iter().any(|s| s.addition.is_some())
+            matches!(t.codec, Codec::Vp8 | Codec::Vp9 { .. })
+                && t.video.as_ref().is_some_and(|v| v.alpha_mode != 0)
+                && t.samples.iter().any(|s| s.addition.is_some())
         });
         let alpha = alpha.map(|t| Arc::new(crate::webm_alpha::AlphaLayer::new(bytes.clone(), t.samples.iter().map(|s| (s.pts, s.addition)))));
         Ok(Self { info, bytes, file, vtrack, ventry, video: GopCache::new(explicit_color).with_rotation(rotation), alpha, audios })
@@ -439,6 +442,21 @@ impl MkvSource {
 
     fn read(&self, track: usize, i: usize) -> crate::Result<Vec<u8>> {
         self.file.read_sample(&self.bytes, track, i).map_err(|e| CodecError::Container(e.to_string()))
+    }
+
+    /// Whether sample `i` of a VP8 track is a hidden frame (`show_frame` 0, RFC 6386 9.1): only the
+    /// first byte of the frame is read.
+    fn vp8_hidden(&self, track: usize, i: usize) -> bool {
+        let Some(t) = self.file.tracks.get(track) else { return false };
+        let Some(s) = t.samples.get(i) else { return false };
+        let first = match t.frame_prefix(u64::from(s.size)).first() {
+            Some(&b) => Some(b),
+            None => {
+                let mut b = [0u8; 1];
+                (s.size > 0 && self.bytes.0.read_at(s.offset, &mut b).is_ok()).then_some(b[0])
+            }
+        };
+        first.is_some_and(|b| b & 0x10 == 0)
     }
 
     fn audio_decoder(&self, c: &Codec, rate: u32) -> crate::Result<PacketDecoder> {
@@ -534,7 +552,20 @@ impl VideoSamples for MkvVideo<'_> {
         self.src.file.tracks[self.track].sync_sample_before(i)
     }
     fn sample_at(&self, t: i64) -> Option<usize> {
-        self.src.file.tracks[self.track].sample_at_pts(t)
+        let track = &self.src.file.tracks[self.track];
+        let i = track.sample_at_pts(t)?;
+        if !matches!(track.codec, Codec::Vp8) {
+            return Some(i);
+        }
+        // VP8 has no superframes: an encoder stores a hidden (altref) frame as a block of its own
+        // with the time of the frame that follows it, which vpxenc moves 1 ms later. The hidden
+        // frame shows nothing, so its time asks for that next shown frame (as decoders that pass
+        // the two on as one packet show it).
+        let mut k = i;
+        while k + 1 < track.samples.len() && k < i + 8 && self.src.vp8_hidden(self.track, k) {
+            k += 1;
+        }
+        Some(k)
     }
     fn read(&self, i: usize) -> crate::Result<Vec<u8>> {
         self.src.read(self.track, i)

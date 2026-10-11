@@ -547,6 +547,60 @@ pub fn vp9_factory(e: &SampleEntry) -> Option<Result<Box<dyn VideoDecoder>>> {
     }
 }
 
+/// Our pure-Rust VP8 decoder (RFC 6386; #432): WebM / Matroska `V_VP8` and MP4 `vp08`.
+pub struct Vp8Decoder {
+    dec: filmcraft_vp8::Decoder,
+}
+
+impl Default for Vp8Decoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Vp8Decoder {
+    pub fn new() -> Self {
+        Self { dec: filmcraft_vp8::Decoder::new() }
+    }
+
+    fn convert(p: filmcraft_vp8::Picture) -> DecodedFrame {
+        use filmcraft_frame::{Chroma, PixelData};
+        use std::sync::Arc;
+        // color_space 0 is BT.601 YUV (RFC 6386 9.2), studio swing; a container's Colour wins
+        let color = filmcraft_color::ColorInfo { matrix: filmcraft_color::Matrix::Bt601, ..filmcraft_color::ColorInfo::REC709 };
+        let data = PixelData::Yuv8 { planes: [Arc::new(p.y), Arc::new(p.u), Arc::new(p.v)], chroma: Chroma::C420, alpha: None };
+        let frame = VideoFrame { width: p.width, height: p.height, data, color, par: (1, 1), pts: filmcraft_time::Tick::ZERO };
+        DecodedFrame { pts: p.pts, frame, draft: false }
+    }
+}
+
+impl VideoDecoder for Vp8Decoder {
+    fn decode(&mut self, sample: &[u8], pts: i64) -> Result<Vec<DecodedFrame>> {
+        let pic = self.dec.decode(sample, pts).map_err(|e| CodecError::Decode(e.to_string()))?;
+        Ok(pic.into_iter().map(Self::convert).collect())
+    }
+    fn flush(&mut self) -> Vec<DecodedFrame> {
+        // no reordering: every picture comes out with its frame
+        Vec::new()
+    }
+    fn reset(&mut self) {
+        self.dec.reset();
+    }
+    fn name(&self) -> &str {
+        "FilmCraft VP8"
+    }
+    fn is_random_access(&self, sample: &[u8]) -> Option<bool> {
+        Some(filmcraft_vp8::is_keyframe(sample))
+    }
+    fn is_disposable(&self, sample: &[u8]) -> bool {
+        self.dec.is_disposable(sample)
+    }
+}
+
+pub fn vp8_factory(e: &SampleEntry) -> Option<Result<Box<dyn VideoDecoder>>> {
+    (e.format.0 == *b"vp08").then(|| Ok(Box::new(Vp8Decoder::new()) as Box<dyn VideoDecoder>))
+}
+
 /// Our AV1 decoder. The `av1C` configuration OBUs (sequence header) are fed before the first
 /// sample and again after every reset.
 pub struct Av1Decoder {

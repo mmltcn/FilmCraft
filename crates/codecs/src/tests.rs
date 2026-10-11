@@ -449,6 +449,119 @@ fn vp9_webm_alpha_layer_matches_libvpx() {
     }
 }
 
+/// #432: VP8 in WebM with hidden altref frames (vpxenc, two-pass with ARNR: 11 of its 161
+/// frames are not shown). Frames requested out of order (seeks back and forth, then sequential
+/// playback across the hidden frames) are sample-exact against libvpx's decode, and the stream's
+/// colour is BT.601 (RFC 6386 9.2). Skipped without ffmpeg or vpxenc.
+#[test]
+fn vp8_webm_random_access_matches_libvpx() {
+    let frames = 150usize;
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/codecs");
+    let path = dir.join("vp8_hidden_altref.webm");
+    if !path.exists() {
+        let Some(y4m) =
+            fixture_path("mandelbrot_352x288_150.y4m", &["-f", "lavfi", "-i", "mandelbrot=s=352x288:r=25", "-frames:v", "150", "-pix_fmt", "yuv420p"])
+        else {
+            return;
+        };
+        let tmp = dir.join(format!("vp8_hidden_altref.{}.webm", std::process::id()));
+        let enc = Command::new("vpxenc")
+            .args(["--codec=vp8", "--passes=2", "--auto-alt-ref=1", "--lag-in-frames=25", "--arnr-maxframes=7", "--arnr-strength=5"])
+            .args(["--target-bitrate=300", "--kf-max-dist=150", "-q", "-o"])
+            .arg(&tmp)
+            .arg(&y4m)
+            .status();
+        if !enc.is_ok_and(|s| s.success()) {
+            eprintln!("vpxenc not available; skipping");
+            return;
+        }
+        let _ = std::fs::rename(&tmp, &path);
+    }
+    let p = path.to_string_lossy().into_owned();
+    let Some(reference) =
+        fixture("vp8_hidden_altref.webm.yuv", &["-c:v", "libvpx", "-i", &p, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p"])
+    else {
+        return;
+    };
+    let bytes: Arc<[u8]> = std::fs::read(&path).unwrap().into();
+    let src = crate::open_bytes("vp8_hidden_altref.webm", bytes).unwrap();
+    let info = src.info().clone();
+    assert_eq!(info.container, "WebM");
+    let v = info.video.as_ref().unwrap();
+    assert_eq!(v.codec, "VP8");
+    assert_eq!((v.width, v.height), (352, 288));
+    assert_eq!(v.color.matrix, filmcraft_color::Matrix::Bt601);
+    assert_eq!(reference.len(), frames * 352 * 288 * 3 / 2);
+    let frame_len = reference.len() / frames;
+    let rate = info.frame_rate();
+    let order: Vec<usize> = [147, 3, 90, 26, 24, 149, 0, 112, 61].into_iter().chain(40..frames).collect();
+    for k in order {
+        let f = src.video_frame(FrameRequest::full(rate.tick_of(k as i64))).unwrap();
+        assert_eq!((f.width, f.height), (352, 288));
+        assert_eq!(f.color.matrix, filmcraft_color::Matrix::Bt601);
+        assert!(yuv_bytes(&f) == reference[k * frame_len..(k + 1) * frame_len], "frame {k} differs from libvpx");
+    }
+}
+
+/// #432 / #402: a VP8 WebM with an alpha layer (`AlphaMode` 1, a second VP8 stream in each
+/// block's `BlockAdditional`, as browsers and GIF converters write transparent WebM) decodes
+/// with that alpha; frames requested out of order match libvpx exactly, colour and alpha.
+#[test]
+fn vp8_webm_alpha_layer_matches_libvpx() {
+    let (w, h, frames) = (176usize, 144usize, 30usize);
+    let Some(path) = fixture_path(
+        "alpha_vp8.webm",
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=176x144:r=25,format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='mod(X*2+N*7\\,256)'",
+            "-frames:v",
+            "30",
+            "-c:v",
+            "libvpx",
+            "-pix_fmt",
+            "yuva420p",
+            "-g",
+            "10",
+            "-auto-alt-ref",
+            "0",
+            "-b:v",
+            "600k",
+        ],
+    ) else {
+        return;
+    };
+    let src_path = path.to_string_lossy().into_owned();
+    let Some(reference) =
+        fixture("alpha_vp8.webm.yuva420p.yuv", &["-c:v", "libvpx", "-i", &src_path, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuva420p"])
+    else {
+        return;
+    };
+    let (luma, chroma) = (w * h, (w / 2) * (h / 2));
+    let frame_len = luma * 2 + chroma * 2;
+    if reference.len() != frame_len * frames {
+        eprintln!("libvpx reference has {} bytes, not {}; skipping", reference.len(), frame_len * frames);
+        return;
+    }
+    let bytes: Arc<[u8]> = std::fs::read(&path).unwrap().into();
+    let src = crate::open_bytes("alpha_vp8.webm", bytes).unwrap();
+    let info = src.info().clone();
+    assert_eq!(info.container, "WebM");
+    assert!(info.video.as_ref().unwrap().has_alpha);
+    let rate = info.frame_rate();
+    let order: Vec<usize> = [29, 3, 17, 12, 0, 25, 21, 9].into_iter().chain(10..frames).collect();
+    for k in order {
+        let f = src.video_frame(FrameRequest::full(rate.tick_of(k as i64))).unwrap();
+        let r = &reference[k * frame_len..(k + 1) * frame_len];
+        let filmcraft_frame::PixelData::Yuv8 { planes, alpha, .. } = &f.data else { panic!("frame {k}: not 8-bit YUV: {}", f.format_label()) };
+        assert_eq!(planes[0].as_slice(), &r[..luma], "frame {k}: luma");
+        assert_eq!(planes[1].as_slice(), &r[luma..luma + chroma], "frame {k}: U");
+        let alpha = alpha.as_ref().unwrap_or_else(|| panic!("frame {k}: no alpha plane"));
+        assert_eq!(alpha.as_slice(), &r[luma + 2 * chroma..], "frame {k}: alpha");
+    }
+}
+
 /// Every sample flagged as sync (as in an MP4 without `stss`): the GOP cache must still start
 /// decoding at a real VP9 key frame.
 #[test]
