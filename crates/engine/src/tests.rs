@@ -958,3 +958,34 @@ fn enable_flips_each_selected_clip() {
     s.execute("clip.enable", json!({"clips": [a, b]})).unwrap();
     assert_eq!((enabled(&s, a), enabled(&s, b)), (true, true));
 }
+
+/// Times before sequence start are unreachable in the GUI and cut off on export.
+#[test]
+fn negative_place_and_marker_times_are_refused() {
+    let mut s = demo();
+    let item = s.active_sequence().unwrap().video_tracks[0].items[0].item;
+    let before = s.project.clone();
+    let n_markers = s.active_sequence().unwrap().markers.len();
+    let n_clips: usize = s.active_sequence().unwrap().video_tracks.iter().map(|t| t.items.len()).sum();
+    for (cmd, params) in [
+        ("timeline.place", json!({"item": item.0, "frame": -12})),
+        ("timeline.place", json!({"item": item.0, "seconds": -1.0})),
+        ("timeline.place", json!({"item": item.0, "time": -1})),
+        ("markers.add", json!({"frame": -10})),
+        ("markers.add", json!({"seconds": -0.5})),
+        ("markers.add", json!({"time": i64::MIN})),
+        ("markers.addChapter", json!({"frame": -1})),
+        ("markers.addRange", json!({"time": -1, "durationFrames": 10})),
+        ("markers.addFlashCue", json!({"frame": -3})),
+    ] {
+        let e = s.execute(cmd, params.clone()).expect_err(&format!("{cmd} {params}"));
+        assert!(matches!(&e, EngineError::BadParams { cmd: c, msg } if c == cmd && msg.contains("negative")), "{cmd} {params}: {e:?}");
+        assert_eq!(*s.project, *before);
+    }
+    assert_eq!(s.active_sequence().unwrap().markers.len(), n_markers);
+    let n_clips_after: usize = s.active_sequence().unwrap().video_tracks.iter().map(|t| t.items.len()).sum();
+    assert_eq!(n_clips_after, n_clips);
+    s.execute("timeline.place", json!({"item": item.0, "frame": 0})).unwrap();
+    s.execute("markers.add", json!({"frame": 0, "name": "start"})).unwrap();
+    assert!(s.active_sequence().unwrap().markers.iter().any(|m| m.start == Tick::ZERO && m.name == "start"));
+}

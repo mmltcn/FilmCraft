@@ -31,7 +31,7 @@ use filmcraft_project::{AudioChannels, ClipId, ItemId, Label, Marker, MarkerId, 
 use filmcraft_time::{Tick, TimeRange};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, always, bad, bool_p, clips_p, has_seq, str_p, time_p, track_p, with_links};
+use crate::commands::{CommandSpec, always, bad, bool_p, clips_p, has_seq, sequence_time_p, str_p, time_p, track_p, with_links};
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -206,7 +206,7 @@ fn groups() -> Vec<(&'static str, Vec<CommandSpec>)> {
                     r#"{"time":ticks?,"name":str?,"comment":str?,"color":label?}"#,
                     has_seq,
                     |s, p| {
-                        let t = time_p(s, p, "").unwrap_or(s.playhead());
+                        let t = sequence_time_p(s, p, "", "markers.addChapter")?.unwrap_or(s.playhead());
                         let n = s.active_sequence().map(|q| q.markers.iter().filter(|m| m.kind == MarkerKind::Chapter).count()).unwrap_or(0) + 1;
                         let name = str_p(p, "name").map(str::to_string).unwrap_or_else(|| format!("Chapter {n}"));
                         let id = add_marker(s, "Add Chapter Marker", t, Tick::ZERO, MarkerKind::Chapter, name, p)?;
@@ -977,7 +977,7 @@ fn add_marker(s: &mut Session, label: &str, t: Tick, dur: Tick, kind: MarkerKind
 /// `duration` say otherwise) at the playhead.
 fn add_range_marker(s: &mut Session, p: &Value) -> Result<Value> {
     let rate = s.sequence_rate();
-    let t = time_p(s, p, "").unwrap_or(s.playhead());
+    let t = sequence_time_p(s, p, "", "markers.addRange")?.unwrap_or(s.playhead());
     let dur = p
         .get("duration")
         .and_then(Value::as_i64)

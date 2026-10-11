@@ -239,6 +239,15 @@ pub(crate) fn time_p(s: &Session, p: &Value, prefix: &str) -> Option<Tick> {
     None
 }
 
+/// Sequence time from params. Times before 0 are unreachable in the GUI and cut off on export.
+pub(crate) fn sequence_time_p(s: &Session, p: &Value, prefix: &str, cmd: &str) -> Result<Option<Tick>> {
+    let Some(t) = time_p(s, p, prefix) else { return Ok(None) };
+    if t < Tick::ZERO {
+        return Err(bad(cmd, "time must not be negative"));
+    }
+    Ok(Some(t))
+}
+
 pub(crate) fn clip_p(p: &Value, k: &str) -> Option<ClipId> {
     u64_p(p, k).map(ClipId)
 }
@@ -1999,7 +2008,7 @@ fn build() -> Vec<CommandSpec> {
                     return Ok(v);
                 }
                 let (_seq, ph) = marker_list_mut(s)?;
-                let t = time_p(s, p, "").unwrap_or(ph);
+                let t = sequence_time_p(s, p, "", "markers.add")?.unwrap_or(ph);
                 let name = str_p(p, "name").unwrap_or("").to_string();
                 let comment = str_p(p, "comment").unwrap_or("").to_string();
                 let color = str_p(p, "color").and_then(Label::from_name).unwrap_or(Label::Green);
@@ -2200,7 +2209,7 @@ fn build() -> Vec<CommandSpec> {
                     return Err(bad("timeline.place", "enable video, audio, or both"));
                 }
                 let item = item_p(p, "item").ok_or_else(|| bad("timeline.place", "need `item`"))?;
-                let at = time_p(s, p, "").unwrap_or(s.playhead());
+                let at = sequence_time_p(s, p, "", "timeline.place")?.unwrap_or(s.playhead());
                 let tg = s.targeting();
                 let pi = s.project.item(item).ok_or_else(|| bad("timeline.place", "no such item"))?;
                 let is_audio = |t: TrackId| s.active_sequence().is_some_and(|q| q.audio_tracks.iter().any(|x| x.id == t));
