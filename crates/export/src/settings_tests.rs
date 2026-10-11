@@ -518,7 +518,7 @@ fn loudness_normalization_hits_target_and_true_peak() {
         assert!((i - target).abs() < 0.5, "target {target}: measured {i:.2} LUFS");
         assert!(tp <= -0.9, "true peak {tp:.2} dBTP");
         let rep = prog.loudness.lock().unwrap().unwrap();
-        assert!((rep.measured_lufs - (target - rep.gain_db)).abs() < 1e-6);
+        assert!((rep.measured_lufs + rep.gain_db - target).abs() < 0.1, "unlimited tone needs no correction");
     }
     // a target the peaks cannot reach: the limiter holds the true-peak ceiling
     let path = dir.path("hot.wav");
@@ -869,4 +869,81 @@ fn gpu_rendering_is_off_by_default() {
     assert_eq!(s.gpu_rendering, crate::GpuRendering::Off);
     let auto: ExportSettings = serde_json::from_value(serde_json::json!({"format": "h264", "gpuRendering": "auto"})).unwrap();
     assert_eq!(auto.gpu_rendering, crate::GpuRendering::Auto);
+}
+
+/// Brief large peaks over a quiet bed exercise loudness lost during limiter release.
+struct CrestSource(filmcraft_media::SharedSource, Arc<std::sync::atomic::AtomicUsize>);
+impl MediaSource for CrestSource {
+    fn info(&self) -> &filmcraft_media::MediaInfo {
+        self.0.info()
+    }
+    fn video_frame(&self, req: FrameRequest) -> filmcraft_media::Result<Arc<filmcraft_frame::VideoFrame>> {
+        self.0.video_frame(req)
+    }
+    fn audio(&self, start: i64, frames: usize, sample_rate: u32) -> filmcraft_media::Result<filmcraft_frame::AudioBuffer> {
+        self.1.fetch_add(1, Ordering::Relaxed);
+        let samples: Vec<f32> = (0..frames)
+            .map(|i| {
+                let at = start + i as i64;
+                let phase = at.rem_euclid(sample_rate as i64 / 4);
+                let amplitude = if phase < sample_rate as i64 / 500 { 0.9 } else { 0.08 };
+                amplitude * (std::f32::consts::TAU * 1000.0 * at as f32 / sample_rate as f32).sin()
+            })
+            .collect();
+        Ok(filmcraft_frame::AudioBuffer { sample_rate, channels: vec![samples.clone(), samples] })
+    }
+}
+
+#[test]
+fn loudness_normalization_corrects_limiter_loss_and_bounds_impossible_targets() {
+    use std::cell::Cell;
+    let (p, seq, mut sources) = matte([0.0, 0.0, 0.0, 1.0], 64, 36, Some(-6.0));
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for source in sources.0.values_mut() {
+        *source = Arc::new(CrestSource(source.clone(), reads.clone()));
+    }
+    let range = TimeRange::new(Tick::ZERO, Tick(TICKS_PER_SECOND));
+    let mut settings = ExportSettings::default();
+    settings.effects.loudness = LoudnessNormalization { enabled: true, target_lufs: -14.0, true_peak_dbtp: -2.0 };
+    for target in [-14.0, 2.0] {
+        settings.effects.loudness.target_lufs = target;
+        let mut audio = audio_out::AudioOut::new(p.clone(), seq, &settings, range).unwrap();
+        let chunks = Cell::new(0);
+        audio
+            .measure(&settings, &sources, &|| {
+                chunks.set(chunks.get() + 1);
+                false
+            })
+            .unwrap();
+        let report = audio.loudness.unwrap();
+        let result = audio.rest(&sources).unwrap();
+        let (integrated, peak) = lufs(&result, 48_000);
+        eprintln!("target {target}: output {integrated:.3} LUFS, {peak:.3} dBTP, gain {:.3}, chunks {}", report.gain_db, chunks.get());
+        assert!(chunks.get() <= 5, "one raw pass plus at most four limited trials");
+        assert_eq!(result[0].len(), 48_000, "measuring must rewind output and limiter latency");
+        assert!(peak <= -1.8, "limiting must remain enabled: {peak}");
+        if target == -14.0 {
+            assert!((integrated - target).abs() < 0.15, "achieved {integrated}");
+            assert!(report.gain_db > target - report.measured_lufs + 0.3, "fixture must require limiter correction");
+        } else {
+            assert!(integrated < target - 1.0, "impossible target sacrifices loudness, not peak ceiling");
+        }
+    }
+    // Cancel after raw measurement and one limited trial, before further refinement.
+    // Record source reads at cancellation to prove no further mixing occurs.
+    let mut audio = audio_out::AudioOut::new(p, seq, &settings, range).unwrap();
+    let chunks = Cell::new(0);
+    let reads_at_cancel = Cell::new(None);
+    let cancel = || {
+        chunks.set(chunks.get() + 1);
+        if chunks.get() > 2 {
+            reads_at_cancel.set(Some(reads.load(Ordering::Relaxed)));
+            true
+        } else {
+            false
+        }
+    };
+    assert!(matches!(audio.measure(&settings, &sources, &cancel), Err(ExportError::Cancelled)));
+    assert_eq!(chunks.get(), 3);
+    assert_eq!(reads_at_cancel.get(), Some(reads.load(Ordering::Relaxed)));
 }
