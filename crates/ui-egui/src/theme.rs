@@ -8,6 +8,8 @@ use std::sync::Arc;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Language;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeKind {
     /// Premiere-style darkest (default).
@@ -414,9 +416,49 @@ pub fn font_families() -> Vec<FontFamily> {
     vec![FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name("semibold".into()), FontFamily::Name("medium".into())]
 }
 
-/// Install the Latin UI fonts, Chinese fallback (craft-fonts or an installed face), Japanese
-/// craft-fonts and egui visuals. Document names keep their glyphs in every interface language.
+/// Install UI fonts for the effective interface language and egui visuals.
 pub fn install(ctx: &egui::Context, t: &Tokens) {
+    install_fonts(ctx, crate::i18n::current());
+    apply_visuals(ctx, t);
+}
+
+/// Rebuild only UI fonts when the effective language changes; keep appearance settings intact.
+pub fn install_fonts(ctx: &egui::Context, language: Language) {
+    let fonts = build_font_definitions(language);
+    ctx.set_fonts(fonts.clone());
+    ctx.add_plugin(PendingUiFonts::default());
+    let _ = ctx.with_plugin(|pending: &mut PendingUiFonts| pending.latest = Some(fonts));
+    ctx.request_repaint();
+}
+
+#[derive(Default)]
+struct PendingUiFonts {
+    latest: Option<FontDefinitions>,
+}
+
+impl egui::Plugin for PendingUiFonts {
+    fn debug_name(&self) -> &'static str {
+        "PendingUiFonts"
+    }
+
+    fn on_begin_pass(&mut self, ui: &mut egui::Ui) {
+        let Some(requested) = self.latest.take() else {
+            return;
+        };
+        // egui compares set_fonts with the installed fonts, so switching away and back before
+        // a pass can leave the intermediate fonts queued. Check after egui consumes that queue.
+        let ctx = ui.ctx();
+        let matches = ctx.fonts_mut(|fonts| fonts.definitions().families == requested.families);
+        if !matches {
+            ctx.set_fonts(requested);
+            ctx.request_discard("apply the latest requested UI font families");
+        }
+    }
+}
+
+/// Latin UI typography stays first. CJK fallbacks select regional glyph forms, rather than
+/// merely filling missing code points. This does not change the document text engine's fonts.
+pub fn build_font_definitions(language: Language) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("inter".into(), Arc::new(FontData::from_static(filmcraft_text::fonts::INTER_REGULAR)));
     fonts.font_data.insert("inter-medium".into(), Arc::new(FontData::from_static(filmcraft_text::fonts::INTER_MEDIUM)));
@@ -426,33 +468,8 @@ pub fn install(ctx: &egui::Context, t: &Tokens) {
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "jbmono".into());
     fonts.families.insert(FontFamily::Name("semibold".into()), vec!["inter-semibold".into(), "inter".into()]);
     fonts.families.insert(FontFamily::Name("medium".into()), vec!["inter-medium".into(), "inter".into()]);
-    // Japanese before Chinese: the two share code points, and Japanese text must keep Japanese
-    // glyph forms; Chinese faces still cover the hanzi Japanese fonts lack
-    add_craft_fonts(&mut fonts);
-    crate::cjk::install(&mut fonts);
-    ctx.set_fonts(fonts);
-    apply_visuals(ctx, t);
-}
-
-/// Name of the egui font for a craft-fonts entry.
-fn craft_font_name(f: &filmcraft_text::fonts::CraftFont) -> String {
-    format!("craft:{} {}", f.family, f.style)
-}
-
-/// Append the Japanese craft-fonts (empty unless built with `CRAFT_FONTS_DIR`) as the last fallbacks
-/// of every font family, after the app's own fonts: BIZ UDPGothic first (bold before regular in
-/// the "semibold" and "medium" families), then the other Japanese faces.
-fn add_craft_fonts(fonts: &mut FontDefinitions) {
-    let jpan: Vec<_> = filmcraft_text::fonts::craft_japanese().collect();
-    for f in &jpan {
-        fonts.font_data.insert(craft_font_name(f), Arc::new(FontData::from_static(f.bytes)));
-    }
-    for (family, stack) in fonts.families.iter_mut() {
-        let heavy = matches!(family, FontFamily::Name(n) if matches!(n.as_ref(), "semibold" | "medium"));
-        let mut order = jpan.clone();
-        order.sort_by_key(|f| (!f.family.contains("Gothic"), (f.style == "Bold") != heavy));
-        stack.extend(order.iter().map(|f| craft_font_name(f)));
-    }
+    crate::cjk::install(&mut fonts, language);
+    fonts
 }
 
 pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
@@ -631,8 +648,8 @@ mod tests {
         ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
     }
 
-    /// Built with craft-fonts: every font family ends with the Japanese faces (BIZ UDPGothic
-    /// first), and Japanese text gets real glyphs, not the replacement box.
+    /// Built with craft-fonts: Japanese keeps BIZ UDPGothic first within its regional group,
+    /// and Japanese text gets real glyphs, not the replacement box.
     #[test]
     fn japanese_renders_with_craft_fonts() {
         if filmcraft_text::fonts::craft_japanese().next().is_none() {
@@ -644,7 +661,7 @@ mod tests {
             let defs = fonts.definitions().clone();
             for (family, stack) in &defs.families {
                 let first = stack.iter().position(|n| n.starts_with("craft:")).unwrap_or(stack.len());
-                assert!(first > 0 && stack[first..].iter().all(|n| n.starts_with("craft:")), "{family:?}: {stack:?}");
+                assert!(first > 0, "{family:?}: {stack:?}");
                 let first_japanese = stack.iter().find(|n| n.starts_with("craft:BIZ") || n.starts_with("craft:Shippori"));
                 assert!(first_japanese.is_some_and(|n| n.starts_with("craft:BIZ UDPGothic")), "{family:?}: {stack:?}");
             }
@@ -677,5 +694,73 @@ mod tests {
                 assert!(defs.families.values().flatten().all(|name| !name.starts_with("craft:")));
             }
         });
+    }
+
+    #[test]
+    fn locale_stacks_keep_all_latin_family_heads() {
+        for language in Language::ALL {
+            let defs = build_font_definitions(language);
+            for (family, head) in [
+                (FontFamily::Proportional, "inter"),
+                (FontFamily::Monospace, "jbmono"),
+                (FontFamily::Name("medium".into()), "inter-medium"),
+                (FontFamily::Name("semibold".into()), "inter-semibold"),
+            ] {
+                let stack = &defs.families[&family];
+                assert_eq!(stack.first().map(String::as_str), Some(head));
+                assert!(stack.iter().all(|name| defs.font_data.contains_key(name)));
+                assert_eq!(stack.iter().collect::<std::collections::BTreeSet<_>>().len(), stack.len());
+                if language == Language::ZhCn && crate::cjk::available() {
+                    let first_cjk = stack.iter().find(|name| name.starts_with("craft:") || name.starts_with("system-"));
+                    assert!(
+                        first_cjk.is_some_and(|name| name == "system-hans"
+                            || crate::cjk::craft_fonts().any(|f| {
+                                f.scripts.contains(&"Hans") && !f.scripts.contains(&"Jpan") && name == &format!("craft:{} {}", f.family, f.style)
+                            })),
+                        "{family:?}: {stack:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Compare actual ink, not coverage: both Japanese and Hans cover these shared characters.
+    /// The selected regional glyphs must equal the corresponding face rendered alone.
+    #[test]
+    fn shared_hanzi_render_with_the_selected_regions_glyphs() {
+        let Some(hans) = crate::cjk::craft_fonts().find(|f| f.scripts.contains(&"Hans") && f.style == "Regular") else {
+            eprintln!("SKIPPED: build with craft-fonts to compare regional glyph ink");
+            return;
+        };
+        let Some(jpan) = filmcraft_text::fonts::craft_japanese().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular") else { return };
+        fn ink(ctx: &egui::Context, family: FontFamily, ch: char) -> ([usize; 2], Vec<Color32>) {
+            ctx.fonts_mut(|fonts| {
+                let galley = fonts.layout_no_wrap(ch.to_string(), FontId::new(32.0, family), Color32::WHITE);
+                let uv = galley.rows[0].glyphs[0].uv_rect;
+                assert!(!uv.is_nothing());
+                let image = fonts.image();
+                let [x0, y0] = uv.min.map(usize::from);
+                let [x1, y1] = uv.max.map(usize::from);
+                let pixels = (y0..y1).flat_map(|y| image.pixels[y * image.size[0] + x0..y * image.size[0] + x1].iter().copied()).collect();
+                ([x1 - x0, y1 - y0], pixels)
+            })
+        }
+        let ctx = egui::Context::default();
+        let mut regional_ink = Vec::new();
+        for (language, face) in [(Language::ZhCn, hans), (Language::Ja, jpan)] {
+            let mut defs = build_font_definitions(language);
+            let reference = FontFamily::Name("regional-reference".into());
+            defs.families.insert(reference.clone(), vec![format!("craft:{} {}", face.family, face.style)]);
+            ctx.set_fonts(defs);
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            let expected: Vec<_> = "骨直令遍".chars().map(|ch| ink(&ctx, reference.clone(), ch)).collect();
+            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                let actual: Vec<_> = "骨直令遍".chars().map(|ch| ink(&ctx, family.clone(), ch)).collect();
+                assert_eq!(actual, expected, "{language:?} / {family:?}");
+            }
+            regional_ink.push(expected);
+        }
+        assert_ne!(regional_ink[0], regional_ink[1], "test faces must have different regional forms");
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
     }
 }

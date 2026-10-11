@@ -17,8 +17,8 @@
 //! a font already installed on the system ([`system_japanese_font`]); with neither, switching to
 //! Japanese is refused with a message.
 //!
-//! Simplified Chinese uses the Chinese fallback `theme::install` always adds (craft-fonts Hans/Hant
-//! faces, otherwise one installed system face, see `cjk.rs`); without one, switching to Chinese is
+//! Simplified Chinese prefers a Hans fallback (craft-fonts or a known installed Simplified
+//! Chinese family, see `cjk.rs`); without one, switching to Chinese is
 //! refused the same way ([`chinese_font_available`]).
 
 mod catalog;
@@ -225,8 +225,7 @@ pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
 const JAPANESE_SAMPLE: &str = "日本語ファイル編集あア";
 
 /// Installed families preferred for Japanese interface text, best first (Gothic / sans-serif faces
-/// read best at menu sizes). Any other installed face that covers [`JAPANESE_SAMPLE`] is used if
-/// none of these is present.
+/// read best at menu sizes). Coverage alone cannot identify regional forms of shared hanzi.
 const PREFERRED_JAPANESE: &[&str] = &[
     "Hiragino Sans",
     "Hiragino Kaku Gothic ProN",
@@ -238,14 +237,11 @@ const PREFERRED_JAPANESE: &[&str] = &[
     "Noto Sans CJK JP",
     "Noto Sans JP",
     "Source Han Sans JP",
-    "Source Han Sans",
     "IPAexGothic",
     "IPAGothic",
     "TakaoGothic",
     "VL Gothic",
 ];
-
-const JAPANESE_FONT: &str = "system-japanese";
 
 /// A Japanese font already installed on this system, for the interface (none is bundled). Looked up
 /// once per process: the system font folders are scanned on first use (name tables only), then the
@@ -253,52 +249,46 @@ const JAPANESE_FONT: &str = "system-japanese";
 pub fn system_japanese_font() -> Option<Arc<egui::FontData>> {
     static FONT: OnceLock<Option<Arc<egui::FontData>>> = OnceLock::new();
     FONT.get_or_init(|| {
+        if cfg!(target_arch = "wasm32") {
+            return None;
+        }
         filmcraft_text::fonts::scan_system();
         let faces: Vec<_> = filmcraft_text::fonts::all_faces().into_iter().filter(|f| f.info.origin == "system" && !f.info.italic).collect();
         let covers = |f: &filmcraft_text::fonts::Face| f.covers_text(JAPANESE_SAMPLE);
         // within a family, the face closest to regular weight
         let by_weight = |f: &&Arc<filmcraft_text::fonts::Face>| f.info.weight.abs_diff(400);
-        let preferred =
+        let face =
             PREFERRED_JAPANESE.iter().find_map(|name| faces.iter().filter(|f| f.info.family.eq_ignore_ascii_case(name) && covers(f)).min_by_key(by_weight));
-        let face = preferred.or_else(|| faces.iter().filter(|f| covers(f)).min_by_key(by_weight))?;
+        let face = face?;
         // kept for the life of the process (one font, read once) so installing it again after a
         // theme change shares the bytes instead of copying the whole file
-        let bytes: &'static [u8] = Box::leak(face.data()?.into_boxed_slice());
-        Some(Arc::new(egui::FontData { font: std::borrow::Cow::Borrowed(bytes), index: face.info.index, tweak: Default::default() }))
+        Some(Arc::new(egui::FontData { font: std::borrow::Cow::Owned(face.data()?), index: face.info.index, tweak: Default::default() }))
     })
     .clone()
 }
 
 /// Whether the craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`) supplies a
-/// Japanese interface font: some craft-fonts face covers [`JAPANESE_SAMPLE`]. `theme::install` adds
+/// Japanese interface font: a Jpan craft-fonts face covers [`JAPANESE_SAMPLE`]. `theme::install` adds
 /// these faces to every font family, so nothing else needs installing (and no system scan runs).
 pub fn craft_japanese_font() -> bool {
     filmcraft_text::fonts::craft_japanese().next().is_some()
         && filmcraft_text::fonts::all_faces()
             .iter()
-            .any(|f| f.info.origin == filmcraft_text::fonts::CRAFT_ORIGIN && JAPANESE_SAMPLE.chars().all(|c| f.has_char(c)))
+            .any(|f| is_craft_japanese_face(&f.info, filmcraft_text::fonts::CRAFT_FONTS) && JAPANESE_SAMPLE.chars().all(|c| f.has_char(c)))
 }
 
-/// Japanese for the interface: true when built with the craft-fonts (already installed by
-/// `theme::install`). Otherwise add the system's Japanese font as the last fallback of every theme font family, from the next
-/// pass on. Returns false (and changes nothing) when no Japanese font is installed. Call it again
-/// after `theme::install`, which replaces the font definitions.
-pub fn install_japanese_font(ctx: &egui::Context) -> bool {
-    if craft_japanese_font() {
-        return true;
-    }
-    let Some(font) = system_japanese_font() else { return false };
-    let families = crate::theme::font_families()
-        .into_iter()
-        .map(|family| egui::epaint::text::InsertFontFamily { family, priority: egui::epaint::text::FontPriority::Lowest })
-        .collect();
-    // queued for the next pass (works before the first frame); a no-op when already installed
-    ctx.add_font(egui::epaint::text::FontInsert { name: JAPANESE_FONT.into(), data: (*font).clone(), families });
-    true
+fn is_craft_japanese_face(info: &filmcraft_text::fonts::FaceInfo, craft_fonts: &[filmcraft_text::fonts::CraftFont]) -> bool {
+    info.origin == filmcraft_text::fonts::CRAFT_ORIGIN
+        && craft_fonts.iter().any(|f| f.scripts.contains(&"Jpan") && info.family.eq_ignore_ascii_case(f.family) && info.style.eq_ignore_ascii_case(f.style))
+}
+
+/// Whether a Japanese UI face is available. The theme builder installs it in locale order.
+pub fn japanese_font_available() -> bool {
+    craft_japanese_font() || system_japanese_font().is_some()
 }
 
 /// Whether the interface can show Simplified Chinese: `theme::install` always adds a Chinese
-/// fallback face when there is one (craft-fonts Hans/Hant faces, otherwise an installed system
+/// fallback face when there is one (craft-fonts Hans faces, otherwise a known Simplified system
 /// face, see `cjk.rs`), so nothing needs installing here. False on systems without either.
 pub fn chinese_font_available() -> bool {
     crate::cjk::available()
@@ -307,6 +297,36 @@ pub fn chinese_font_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn japanese_craft_faces_require_matching_script_family_style_and_origin() {
+        use filmcraft_text::fonts::{CRAFT_ORIGIN, CraftFont, FaceData, FaceInfo, INTER_REGULAR};
+
+        let craft = [
+            CraftFont { family: "Japanese", style: "Regular", scripts: &["Jpan"], bytes: INTER_REGULAR },
+            CraftFont { family: "Chinese", style: "Regular", scripts: &["Hans"], bytes: INTER_REGULAR },
+            CraftFont { family: "Japanese", style: "Bold", scripts: &["Hans"], bytes: INTER_REGULAR },
+        ];
+        let mut info = FaceInfo {
+            family: "Japanese".into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            index: 0,
+            data: FaceData::Static(INTER_REGULAR),
+            origin: CRAFT_ORIGIN,
+        };
+        assert!(is_craft_japanese_face(&info, &craft));
+        assert!(!is_craft_japanese_face(&info, &[]));
+        info.family = "Chinese".into();
+        assert!(!is_craft_japanese_face(&info, &craft), "a Hans face cannot prove Japanese regional forms");
+        info.family = "Japanese".into();
+        info.style = "Bold".into();
+        assert!(!is_craft_japanese_face(&info, &craft), "Jpan metadata applies to a specific style");
+        info.style = "Regular".into();
+        info.origin = "system";
+        assert!(!is_craft_japanese_face(&info, &craft), "a system face is not the installed craft entry");
+    }
 
     #[test]
     fn catalogs_are_well_formed() {
@@ -511,6 +531,69 @@ mod tests {
         restarted.prefs = serde_json::from_str(&prefs).unwrap();
         assert_eq!(crate::FilmcraftApp::new(restarted).ui.language, Language::ZhCn);
         crate::menus::invoke(&mut app, &ctx, "app.language.english", serde_json::json!({})).unwrap();
+        set_current(Language::En);
+    }
+
+    #[test]
+    fn preferences_and_language_commands_rebuild_fonts_without_editing_project_text() {
+        let mut app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
+        let ctx = egui::Context::default();
+        let project = serde_json::to_value(&app.session.project).unwrap();
+        let document_font = filmcraft_text::fonts::resolve("Inter", "Bold").face;
+        for (language, command) in [
+            (Language::En, "app.language.english"),
+            (Language::ZhCn, "app.language.chinese"),
+            (Language::Ja, "app.language.japanese"),
+            (Language::ZhCn, "app.language.chinese"),
+            (Language::En, "app.language.english"),
+        ] {
+            let available = match language {
+                Language::ZhCn => chinese_font_available(),
+                Language::Ja => japanese_font_available(),
+                _ => true,
+            };
+            if !available {
+                continue;
+            }
+            // Settings / control-channel prefs.set, applied without restarting the app.
+            app.session.execute("prefs.set", serde_json::json!({"key": "general.interfaceLanguage", "value": language.code()})).unwrap();
+            app.apply_prefs(&ctx);
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            assert_eq!(app.ui.language, language);
+            ctx.fonts_mut(|fonts| assert_eq!(fonts.definitions().families, crate::theme::build_font_definitions(language).families));
+            // The menu path must also queue the correct fonts before apply_prefs runs again.
+            crate::menus::invoke(&mut app, &ctx, "app.language.english", serde_json::json!({})).unwrap();
+            crate::menus::invoke(&mut app, &ctx, command, serde_json::json!({})).unwrap();
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            ctx.fonts_mut(|fonts| assert_eq!(fonts.definitions().families, crate::theme::build_font_definitions(language).families));
+            for kind in [crate::theme::ThemeKind::Dark, crate::theme::ThemeKind::Medium, crate::theme::ThemeKind::Light] {
+                app.set_theme(&ctx, kind);
+                ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+                ctx.fonts_mut(|fonts| assert_eq!(fonts.definitions().families, crate::theme::build_font_definitions(language).families));
+            }
+            assert_eq!(serde_json::to_value(&app.session.project).unwrap(), project);
+            assert_eq!(filmcraft_text::fonts::resolve("Inter", "Bold").face, document_font);
+        }
+        set_current(Language::En);
+    }
+
+    #[test]
+    fn system_language_uses_the_effective_regions_font_stack() {
+        for locale in ["zh-CN", "ja", "en-US", "zh-Hant-TW"] {
+            let mut app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
+            app.hooks.system_languages = Some(Box::new(move || vec![locale.into()]));
+            let ctx = egui::Context::default();
+            app.apply_prefs(&ctx);
+            let requested = Language::from_locales(&[locale.into()]);
+            let expected = match requested {
+                Language::ZhCn if !chinese_font_available() => Language::En,
+                Language::Ja if !japanese_font_available() => Language::En,
+                _ => requested,
+            };
+            assert_eq!(app.ui.language, expected);
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            ctx.fonts_mut(|fonts| assert_eq!(fonts.definitions().families, crate::theme::build_font_definitions(expected).families));
+        }
         set_current(Language::En);
     }
 
@@ -1065,10 +1148,11 @@ mod tests {
             for family in crate::theme::font_families() {
                 let stack = fonts.definitions().families.get(&family).cloned().unwrap_or_default();
                 if craft {
-                    assert!(stack.last().is_some_and(|n| n.starts_with("craft:")), "{family:?}: {stack:?}");
-                    assert!(!stack.iter().any(|n| n == JAPANESE_FONT), "{family:?}: {stack:?}");
+                    assert!(stack.iter().any(|n| n.starts_with("craft:BIZ") || n.starts_with("craft:Shippori")), "{family:?}: {stack:?}");
+                    assert!(!stack.iter().any(|n| n == "system-japanese"), "{family:?}: {stack:?}");
                 } else {
-                    assert_eq!(stack.last().map(String::as_str), Some(JAPANESE_FONT), "{family:?}: {stack:?}");
+                    let first_cjk = stack.iter().find(|n| n.starts_with("craft:") || n.starts_with("system-"));
+                    assert_eq!(first_cjk.map(String::as_str), Some("system-japanese"), "{family:?}: {stack:?}");
                 }
             }
             // and the glyphs resolve. (Only families whose replacement-box face is another font:

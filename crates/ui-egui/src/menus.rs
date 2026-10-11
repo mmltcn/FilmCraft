@@ -192,7 +192,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             | "app.language.french"
     ) {
         // Japanese needs the craft-fonts (built with CRAFT_FONTS_DIR) or a font installed on the system
-        if id == "app.language.japanese" && !crate::i18n::install_japanese_font(ctx) {
+        if id == "app.language.japanese" && !crate::i18n::japanese_font_available() {
             return Err("no Japanese font is installed on this system (for example Noto Sans CJK JP); the interface stays in English".into());
         }
         // Chinese needs the Chinese fallback theme::install adds (craft-fonts or a system face)
@@ -215,6 +215,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         let saved = app.session.execute("prefs.set", json!({"key": "general.interfaceLanguage", "value": language.code()}));
         app.ui.language = language;
         crate::i18n::set_current(language);
+        crate::theme::install_fonts(ctx, language);
         if let Err(e) = saved {
             app.ui.status = tlf!("The language changed but could not be saved: {e}", e);
         }

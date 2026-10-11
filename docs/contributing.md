@@ -83,22 +83,33 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p filmcraft
 
 Use an absolute path: `build.rs` runs in `crates/text`, so a relative `CRAFT_FONTS_DIR` would
 resolve from there. `crates/text/build.rs` reads its `fonts/manifest.txt` and embeds the fonts as
-`filmcraft_text::fonts::CRAFT_FONTS` (native: all of them; the web build: only BIZ UDPGothic
-Regular, to keep the wasm small). The Japanese ones become the last fallback of every UI font family
-(`crates/ui-egui/src/theme.rs`, BIZ UDPGothic first) and fallback faces in the text engine (Gothic
+`filmcraft_text::fonts::CRAFT_FONTS` (native: all of them; the web build: BIZ UDPGothic and Noto Sans CJK SC
+Regular, excluding extra weights and serif faces to limit download size). The CJK ones become fallbacks of every UI font family
+(`crates/ui-egui/src/theme.rs`) and fallback faces in the text engine (Gothic
 for sans text, Mincho for serif text). Without `CRAFT_FONTS_DIR`, `CRAFT_FONTS` is empty and
 FilmCraft uses its bundled and system fonts. A `CRAFT_FONTS_DIR` that is not a checkout is a build
 warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds set both). Tests on these fonts'
 glyphs skip when it is empty; when you touch fonts, run the gates both with and without it.
 
-Chinese media names and track labels use the `Hans` / `Hant` craft-fonts faces after the Japanese
-fallbacks in every UI font family, regardless of interface language (Japanese and Chinese share code
-points, so Japanese text keeps Japanese glyph forms; the Chinese faces cover hanzi the Japanese ones lack). Without those build inputs,
-native builds look up an installed Chinese face (for example Microsoft YaHei or Noto Sans CJK SC)
-once and reuse it across theme changes. No system font files are bundled or copied into the app.
+UI font stacks keep Inter / JetBrains Mono first, then select regional CJK glyph forms by the effective
+interface language: Simplified Chinese prefers `Hans`, then `Jpan`, then `Hant`; Japanese and other
+languages keep `Jpan` before `Hans` and `Hant`. The regular/bold and Gothic/sans preferences remain
+within each regional group, including the medium and semibold families. Language changes rebuild
+these stacks without restarting or changing fonts explicitly selected for titles, graphics or captions.
+Without a regional build input, native builds reuse a known installed regional family (for example
+Microsoft YaHei or Noto Sans CJK SC for Hans). This also puts system Hans before bundled Japanese
+in a Chinese interface. Unknown families can fill missing glyphs but cannot establish Hans regional
+forms; a Hant-only font does not enable the Simplified Chinese interface. TTC face indices and loaded
+bytes are retained across language/theme changes. No system font files are bundled or copied into the app.
 Web builds depend on the font faces selected by `crates/text/build.rs`; they cannot scan system fonts.
 `theme::tests::chinese_names_render_in_every_theme_and_font_family` verifies Chinese glyphs in the
 timeline's proportional, monospace, medium and semibold families under all three themes.
+`cjk::tests` checks regional ordering and weight matching even without craft-fonts;
+`theme::tests::shared_hanzi_render_with_the_selected_regions_glyphs` compares rendered shared hanzi
+against standalone Hans/Jpan faces when built with craft-fonts. The i18n tests cover runtime switches
+through preferences and menu commands, system locale resolution and unchanged project text.
+`locale_fonts_ui` runs the saved-language and runtime-switch paths through the app/control channel;
+set `FILMCRAFT_UI_SHOTS=<directory>` to write native renders for Chinese, Japanese and English.
 
 ## 3. Quality gates
 

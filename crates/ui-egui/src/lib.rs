@@ -666,7 +666,7 @@ impl FilmcraftApp {
                 }
                 None => i18n::Language::default(),
             };
-            if language == i18n::Language::Ja && !i18n::install_japanese_font(ctx) {
+            if language == i18n::Language::Ja && !i18n::japanese_font_available() {
                 self.ui.language = i18n::Language::En;
                 self.ui.status = tl!("no Japanese font is installed on this system; the interface stays in English").into();
             } else if language == i18n::Language::ZhCn && !i18n::chinese_font_available() {
@@ -676,6 +676,7 @@ impl FilmcraftApp {
                 self.ui.language = language;
             }
             i18n::set_current(self.ui.language);
+            theme::install_fonts(ctx, self.ui.language);
             let items = menus::menu_items(self);
             if let Some(hook) = self.hooks.shortcuts_changed.as_mut() {
                 hook(&items);
@@ -1867,14 +1868,13 @@ impl eframe::App for FilmcraftApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.styled {
-            theme::install(ctx, &self.tokens);
-            // theme::install replaces the fonts: add the system Japanese font back (or fall back to
-            // English when a saved Japanese setting meets a system without one)
-            // (likewise Chinese without a Chinese face)
-            let japanese_missing = self.ui.language == i18n::Language::Ja && !i18n::install_japanese_font(ctx);
+            // Resolve missing regional fonts before installing the effective language's stack.
+            let japanese_missing = self.ui.language == i18n::Language::Ja && !i18n::japanese_font_available();
             if japanese_missing || (self.ui.language == i18n::Language::ZhCn && !i18n::chinese_font_available()) {
                 self.ui.language = i18n::Language::En;
             }
+            i18n::set_current(self.ui.language);
+            theme::install(ctx, &self.tokens);
             self.styled = true;
             ctx.request_repaint();
         } else {

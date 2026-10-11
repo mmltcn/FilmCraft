@@ -477,7 +477,7 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx, &Tokens::for_kind(crate::theme::ThemeKind::default()));
         // Japanese needs a craft-fonts build or an installed font; without one there is nothing wide to measure
-        if !crate::i18n::install_japanese_font(&ctx) {
+        if !crate::i18n::japanese_font_available() {
             return;
         }
         let labels = ["Transcript", "Captions", "Graphics", "文字起こし", "キャプション", "グラフィックス"];
@@ -493,9 +493,14 @@ mod tests {
             out.textures_delta.clear();
         }
         assert_eq!(widths[..3], [70.0, 56.0, 56.0], "Latin tabs keep 7 px per character");
-        // 5, 6 and 7 Japanese characters of about 12.5 px each, far over the 7 px per character estimate
-        for ((width, chars), label) in widths[3..].iter().zip([5.0_f32, 6.0, 7.0]).zip(&labels[3..]) {
-            assert!(*width > chars * 7.0 * 1.5, "{label}: {width} px");
+        // Regional system faces can have proportional kana. Check the actual layout rather
+        // than assuming every Japanese character occupies a full-width square.
+        for (width, label) in widths[3..].iter().zip(&labels[3..]) {
+            for font in [Tokens::ui(12.5), Tokens::semibold(12.5)] {
+                let drawn = ctx.fonts_mut(|fonts| fonts.layout_no_wrap((*label).into(), font, egui::Color32::WHITE).size().x);
+                assert!(*width >= drawn, "{label}: {width} px must contain the drawn {drawn} px");
+            }
+            assert!(*width >= label.chars().count() as f32 * 7.0, "{label}: keep the minimum tab width");
         }
     }
 }

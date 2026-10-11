@@ -26,6 +26,13 @@ preferred languages that the interface has (the host supplies them through
 otherwise English.
 The `app.language.*` UI commands and `prefs.set` reach it through the control channel.
 Japanese requires a craft-fonts build or a suitable installed font.
+Simplified Chinese requires a Hans craft-fonts face or a known installed Simplified Chinese family.
+UI fonts retain Inter and JetBrains Mono first; Chinese prefers Hans before Japanese and Traditional
+Chinese fallbacks, while Japanese and other languages retain Japanese priority. Changing language
+updates all four UI font families at runtime, including medium/semibold weights. This affects UI
+labels and media names, leaving explicitly selected caption/title/graphics fonts unchanged. Web
+builds use the regular Japanese and Hans faces from craft-fonts; native builds can reuse system TTC
+faces when a regional build input is absent.
 
 English source strings are lookup keys in `src/i18n/<code>.tsv`. `tl!` translates literals, `tlf!`
 fills translated templates, and `i18n::t` translates names from registries. Placeholder values
