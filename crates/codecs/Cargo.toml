@@ -20,6 +20,7 @@ filmcraft-mxf = { workspace = true }
 filmcraft-mpegts = { workspace = true }
 filmcraft-mpeg2v = { workspace = true }
 filmcraft-ac3 = { workspace = true }
+filmcraft-mpa = { workspace = true }
 filmcraft-ogg = { workspace = true }
 filmcraft-bitstream = { workspace = true }
 filmcraft-h264 = { workspace = true }
