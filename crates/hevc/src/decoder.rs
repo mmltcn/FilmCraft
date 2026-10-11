@@ -581,19 +581,24 @@ fn output_meta(sps: &Sps, pts: i64, key: bool, draft: bool) -> OutputMeta {
 fn make_picture(o: &Output<FrameRef>) -> Picture {
     let (cx, cy, cw, ch) = o.meta.crop;
     let (cx, cy, cw, ch) = (cx as usize, cy as usize, cw as usize, ch as usize);
-    let (y, u, v) = o.frame.copy_cropped((cx, cy, cw, ch));
     let (ccw, cch) = (cw.div_ceil(2), ch.div_ceil(2));
     let bd = o.meta.bit_depth;
-    let conv = |p: Vec<u16>| if bd <= 8 { Plane::U8(p.into_iter().map(|v| v as u8).collect()) } else { Plane::U16(p) };
+    let (y, u, v) = if bd <= 8 {
+        let (y, u, v) = o.frame.copy_cropped_u8((cx, cy, cw, ch));
+        (Plane::U8(y), Plane::U8(u), Plane::U8(v))
+    } else {
+        let (y, u, v) = o.frame.copy_cropped((cx, cy, cw, ch));
+        (Plane::U16(y), Plane::U16(u), Plane::U16(v))
+    };
     Picture {
         width: cw as u32,
         height: ch as u32,
         chroma_width: ccw as u32,
         chroma_height: cch as u32,
         bit_depth: bd,
-        y: conv(y),
-        u: conv(u),
-        v: conv(v),
+        y,
+        u,
+        v,
         y_stride: cw,
         uv_stride: ccw,
         pts: o.meta.pts,

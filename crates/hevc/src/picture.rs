@@ -138,27 +138,70 @@ impl Frame {
         }
     }
 
+    /// Copy the w x h block at (x0, y0) of plane `c` (0 = luma, 1 = Cb, 2 = Cr) into `dst`
+    /// (stride `ds`), samples outside the picture replicated from its edges (8-228, 8-229).
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_block(&self, c: usize, x0: i32, y0: i32, w: usize, h: usize, dst: &mut [u16], ds: usize) {
+        let (pw, ph, sh) = if c == 0 { (self.width, self.height, self.log2_ctb) } else { (self.cwidth, self.cheight, self.log2_ctb - 1) };
+        let inside = usize::try_from(x0).ok().filter(|&x| x.saturating_add(w) <= pw);
+        for (r, d) in dst.chunks_mut(ds).take(h).enumerate() {
+            let yy = y0.saturating_add(r as i32).min(ph as i32 - 1).max(0) as usize;
+            let row = self.row(yy >> sh);
+            let plane = match c {
+                0 => &row.y,
+                1 => &row.cb,
+                _ => &row.cr,
+            };
+            let off = (yy & ((1 << sh) - 1)) * pw;
+            let Some(line) = plane.get(off..off + pw) else { return };
+            let Some(d) = d.get_mut(..w) else { return };
+            match inside.and_then(|x| line.get(x..x + w)) {
+                Some(s) => copy_run(s, d),
+                None => {
+                    let max = (pw as i32 - 1).max(0);
+                    for (i, d) in d.iter_mut().enumerate() {
+                        *d = line.get(x0.saturating_add(i as i32).clamp(0, max) as usize).copied().unwrap_or(0);
+                    }
+                }
+            }
+        }
+    }
+
     /// Crop and copy the frame into planar buffers (waits for completion).
     pub fn copy_cropped(&self, crop: (usize, usize, usize, usize)) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        self.copy_cropped_with(crop, &mut out, |o, s| o.extend_from_slice(s));
+        out
+    }
+
+    /// [`copy_cropped`](Self::copy_cropped) into 8-bit planes (samples of an 8-bit picture),
+    /// without an intermediate 16-bit copy.
+    pub fn copy_cropped_u8(&self, crop: (usize, usize, usize, usize)) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        self.copy_cropped_with(crop, &mut out, |o, s| o.extend(s.iter().map(|&v| v as u8)));
+        out
+    }
+
+    fn copy_cropped_with<T>(&self, crop: (usize, usize, usize, usize), out: &mut (Vec<T>, Vec<T>, Vec<T>), put: impl Fn(&mut Vec<T>, &[u16])) {
         let (cx, cy, cw, ch) = crop;
         let ctb = 1usize << self.log2_ctb;
-        let mut y = Vec::with_capacity(cw * ch);
+        let (y, u, v) = out;
+        y.reserve_exact(cw * ch);
         for r in cy..cy + ch {
             let row = self.row(r / ctb);
             let o = (r % ctb) * self.width + cx;
-            y.extend_from_slice(&row.y[o..o + cw]);
+            put(y, &row.y[o..o + cw]);
         }
         let (ccx, ccy, ccw, cch) = (cx / 2, cy / 2, cw.div_ceil(2), ch.div_ceil(2));
         let cctb = ctb / 2;
-        let mut u = Vec::with_capacity(ccw * cch);
-        let mut v = Vec::with_capacity(ccw * cch);
+        u.reserve_exact(ccw * cch);
+        v.reserve_exact(ccw * cch);
         for r in ccy..ccy + cch {
             let row = self.row(r / cctb);
             let o = (r % cctb) * self.cwidth + ccx;
-            u.extend_from_slice(&row.cb[o..o + ccw]);
-            v.extend_from_slice(&row.cr[o..o + ccw]);
+            put(u, &row.cb[o..o + ccw]);
+            put(v, &row.cr[o..o + ccw]);
         }
-        (y, u, v)
     }
 
     /// A frame with every row published from full-picture planes and no motion (used to replace missing
@@ -188,13 +231,69 @@ impl Frame {
     }
 }
 
+/// `dst.copy_from_slice(src)` for the run lengths of prediction blocks as fixed-size copies: a
+/// libc `memcpy` call per short block line costs more than the copy.
+#[inline(always)]
+fn copy_run(src: &[u16], dst: &mut [u16]) {
+    #[inline(always)]
+    fn fixed<const N: usize>(src: &[u16], dst: &mut [u16]) {
+        if let (Some(s), Some(d)) = (src.first_chunk::<N>(), dst.first_chunk_mut::<N>()) {
+            *d = *s;
+        }
+    }
+    match dst.len() {
+        2 => fixed::<2>(src, dst),
+        4 => fixed::<4>(src, dst),
+        6 => fixed::<6>(src, dst),
+        8 => fixed::<8>(src, dst),
+        12 => fixed::<12>(src, dst),
+        16 => fixed::<16>(src, dst),
+        24 => fixed::<24>(src, dst),
+        32 => fixed::<32>(src, dst),
+        48 => fixed::<48>(src, dst),
+        64 => fixed::<64>(src, dst),
+        n => {
+            if let Some(s) = src.get(..n) {
+                dst.copy_from_slice(s);
+            }
+        }
+    }
+}
+
 /// Copy `out.len()` samples of `line` starting at x0, replicating edge samples outside the line.
 #[inline(always)]
 fn copy_line(line: &[u16], x0: i32, out: &mut [i16]) {
     let w = out.len();
     if x0 >= 0 && x0 as usize + w <= line.len() {
-        for (o, &s) in out.iter_mut().zip(&line[x0 as usize..x0 as usize + w]) {
-            *o = s as i16;
+        let src = &line[x0 as usize..x0 as usize + w];
+        // fixed-size copies for the window widths (block width + 7 luma, + 3 chroma): see copy_run
+        #[inline(always)]
+        fn fixed<const N: usize>(src: &[u16], out: &mut [i16]) {
+            if let (Some(s), Some(o)) = (src.first_chunk::<N>(), out.first_chunk_mut::<N>()) {
+                for j in 0..N {
+                    o[j] = s[j] as i16;
+                }
+            }
+        }
+        match w {
+            5 => fixed::<5>(src, out),
+            7 => fixed::<7>(src, out),
+            9 => fixed::<9>(src, out),
+            11 => fixed::<11>(src, out),
+            15 => fixed::<15>(src, out),
+            19 => fixed::<19>(src, out),
+            23 => fixed::<23>(src, out),
+            27 => fixed::<27>(src, out),
+            31 => fixed::<31>(src, out),
+            35 => fixed::<35>(src, out),
+            39 => fixed::<39>(src, out),
+            55 => fixed::<55>(src, out),
+            71 => fixed::<71>(src, out),
+            _ => {
+                for (o, &s) in out.iter_mut().zip(src) {
+                    *o = s as i16;
+                }
+            }
         }
     } else {
         let max = line.len() as i32 - 1;

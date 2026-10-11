@@ -51,8 +51,9 @@ fn tc_beta(q: i32, bs: i32, tc_off: i32, beta_off: i32, bd: u32) -> (i32, i32) {
     ((TC_TABLE[qt as usize] as i32) << (bd - 8), (BETA_TABLE[qb as usize] as i32) << (bd - 8))
 }
 
-/// Boundary strength (8.7.2.4) between 4x4 blocks p and q.
-fn boundary_strength(pic: &PicState, pi: usize, qi: usize, tu_edge: bool) -> i32 {
+/// Boundary strength (8.7.2.4) between 4x4 blocks p and q, in slices `ps` and `qs` (indices into
+/// `pic.slices`, from [`edge_params`]).
+fn boundary_strength(pic: &PicState, pi: usize, qi: usize, tu_edge: bool, ps: u32, qs: u32) -> i32 {
     let (p, q) = (&pic.blk[pi], &pic.blk[qi]);
     if (p.flags | q.flags) & F_INTRA != 0 {
         return 2;
@@ -61,20 +62,22 @@ fn boundary_strength(pic: &PicState, pi: usize, qi: usize, tu_edge: bool) -> i32
         return 1;
     }
     let (mp, mq) = (&pic.mvf[pi], &pic.mvf[qi]);
-    motion_bs(pic, pi, mp, qi, mq)
+    // Same motion in the same slice (same reference lists): same pictures, no motion difference.
+    if mp == mq && ps == qs {
+        return 0;
+    }
+    motion_bs(pic, ps, mp, qs, mq)
 }
 
-fn ref_id(pic: &PicState, blk: usize, f: &MvField, l: usize) -> u32 {
-    let (x, y) = ((blk % pic.w4) * 4, (blk / pic.w4) * 4);
-    let ctb = (y >> pic.log2_ctb) * pic.wctb + (x >> pic.log2_ctb);
-    let s = pic.ctb_slice[ctb];
+/// The picture referenced by list `l` of motion `f` in slice `s`.
+fn ref_id(pic: &PicState, s: u32, f: &MvField, l: usize) -> u32 {
     if s == u32::MAX {
         return u32::MAX;
     }
-    pic.slices[s as usize].ref_ids[l].get(f.ref_idx[l] as usize).copied().unwrap_or(u32::MAX - 1)
+    pic.slices.get(s as usize).and_then(|sl| sl.ref_ids[l].get(f.ref_idx[l] as usize)).copied().unwrap_or(u32::MAX - 1)
 }
 
-fn motion_bs(pic: &PicState, pi: usize, p: &MvField, qi: usize, q: &MvField) -> i32 {
+fn motion_bs(pic: &PicState, ps: u32, p: &MvField, qs: u32, q: &MvField) -> i32 {
     let np = p.pred(0) as u32 + p.pred(1) as u32;
     let nq = q.pred(0) as u32 + q.pred(1) as u32;
     if np != nq {
@@ -84,13 +87,13 @@ fn motion_bs(pic: &PicState, pi: usize, p: &MvField, qi: usize, q: &MvField) -> 
     if np == 1 {
         let lp = if p.pred(0) { 0 } else { 1 };
         let lq = if q.pred(0) { 0 } else { 1 };
-        if ref_id(pic, pi, p, lp) != ref_id(pic, qi, q, lq) {
+        if ref_id(pic, ps, p, lp) != ref_id(pic, qs, q, lq) {
             return 1;
         }
         return far(p.mv[lp], q.mv[lq]) as i32;
     }
-    let (p0, p1) = (ref_id(pic, pi, p, 0), ref_id(pic, pi, p, 1));
-    let (q0, q1) = (ref_id(pic, qi, q, 0), ref_id(pic, qi, q, 1));
+    let (p0, p1) = (ref_id(pic, ps, p, 0), ref_id(pic, ps, p, 1));
+    let (q0, q1) = (ref_id(pic, qs, q, 0), ref_id(pic, qs, q, 1));
     if !((p0 == q0 && p1 == q1) || (p0 == q1 && p1 == q0)) {
         return 1;
     }
@@ -102,8 +105,8 @@ fn motion_bs(pic: &PicState, pi: usize, p: &MvField, qi: usize, q: &MvField) -> 
 }
 
 /// Whether the edge between blocks p and q (q = current block, owning the edge) is filtered, and the
-/// slice-level parameters (tc offset, beta offset) of q's slice.
-fn edge_params(pic: &PicState, px: usize, py: usize, qx: usize, qy: usize) -> Option<(i32, i32)> {
+/// slice-level parameters (tc offset, beta offset) of q's slice, then the slices of p and q.
+fn edge_params(pic: &PicState, px: usize, py: usize, qx: usize, qy: usize) -> Option<(i32, i32, u32, u32)> {
     let s = pic.log2_ctb;
     let pc = (py >> s) * pic.wctb + (px >> s);
     let qc = (qy >> s) * pic.wctb + (qx >> s);
@@ -124,7 +127,7 @@ fn edge_params(pic: &PicState, px: usize, py: usize, qx: usize, qy: usize) -> Op
             return None;
         }
     }
-    Some((sq.tc_offset, sq.beta_offset))
+    Some((sq.tc_offset, sq.beta_offset, ps, qs))
 }
 
 /// Deblock CTB row `r`: vertical edges of the row, then horizontal edges whose q side is in the row.
@@ -148,8 +151,8 @@ fn deblock_row(pic: &mut PicState, r: usize) {
                 continue;
             }
             let (x, y) = (bx * 4, by * 4);
-            let Some((tc_off, beta_off)) = edge_params(pic, x - 1, y, x, y) else { continue };
-            let bs = boundary_strength(pic, qi - 1, qi, e & E_TU_V != 0);
+            let Some((tc_off, beta_off, ps, qs)) = edge_params(pic, x - 1, y, x, y) else { continue };
+            let bs = boundary_strength(pic, qi - 1, qi, e & E_TU_V != 0, ps, qs);
             bs_v[(by - y0 / 4) * w4 + bx] = bs as i8;
             if bs == 0 {
                 continue;
@@ -170,7 +173,7 @@ fn deblock_row(pic: &mut PicState, r: usize) {
             }
             let (x, y) = (bx * 4, by * 4);
             let qi = by * w4 + bx;
-            let Some((tc_off, _)) = edge_params(pic, x - 1, y, x, y) else { continue };
+            let Some((tc_off, ..)) = edge_params(pic, x - 1, y, x, y) else { continue };
             let (p, q) = (pic.blk[qi - 1], pic.blk[qi]);
             let (nfp, nfq) = (p.flags & F_NOFILTER != 0, q.flags & F_NOFILTER != 0);
             for (c, off) in [(1, cb_off), (2, cr_off)] {
@@ -191,9 +194,9 @@ fn deblock_row(pic: &mut PicState, r: usize) {
                 continue;
             }
             let (x, y) = (bx * 4, by * 4);
-            let Some((tc_off, beta_off)) = edge_params(pic, x, y - 1, x, y) else { continue };
+            let Some((tc_off, beta_off, ps, qs)) = edge_params(pic, x, y - 1, x, y) else { continue };
             let pi = qi - w4;
-            let bs = boundary_strength(pic, pi, qi, e & E_TU_H != 0);
+            let bs = boundary_strength(pic, pi, qi, e & E_TU_H != 0, ps, qs);
             bs_h[(by - y0 / 4) * w4 + bx] = bs as i8;
             if bs == 0 {
                 continue;
@@ -212,7 +215,7 @@ fn deblock_row(pic: &mut PicState, r: usize) {
             }
             let (x, y) = (bx * 4, by * 4);
             let qi = by * w4 + bx;
-            let Some((tc_off, _)) = edge_params(pic, x, y - 1, x, y) else { continue };
+            let Some((tc_off, ..)) = edge_params(pic, x, y - 1, x, y) else { continue };
             let (p, q) = (pic.blk[qi - w4], pic.blk[qi]);
             let (nfp, nfq) = (p.flags & F_NOFILTER != 0, q.flags & F_NOFILTER != 0);
             for (c, off) in [(1, cb_off), (2, cr_off)] {
@@ -227,46 +230,88 @@ fn deblock_row(pic: &mut PicState, r: usize) {
 
 /// Filter one 4-sample luma edge segment. `o` = offset of q0 of the first line, `step` = distance
 /// between p/q samples across the edge, `along` = distance between lines.
+///
+/// The 4 x 8 samples (p3..p0, q0..q3 of each line) are read once into an array, filtered there
+/// and written back, a whole line at a time for vertical edges (`step` = 1) and a whole row of
+/// the 4 lines at a time for horizontal ones (`along` = 1): no per-sample index arithmetic or
+/// bounds checks in the filter itself.
 #[allow(clippy::too_many_arguments)]
 fn filter_luma(s: &mut [u16], o: usize, step: usize, along: usize, tc: i32, beta: i32, nfp: bool, nfq: bool, bd: u32) {
-    let px = |s: &[u16], k: usize, i: usize| s[o + k * along - (i + 1) * step] as i32;
-    let qx = |s: &[u16], k: usize, i: usize| s[o + k * along + i * step] as i32;
-    let dp0 = (px(s, 0, 2) - 2 * px(s, 0, 1) + px(s, 0, 0)).abs();
-    let dp3 = (px(s, 3, 2) - 2 * px(s, 3, 1) + px(s, 3, 0)).abs();
-    let dq0 = (qx(s, 0, 2) - 2 * qx(s, 0, 1) + qx(s, 0, 0)).abs();
-    let dq3 = (qx(s, 3, 2) - 2 * qx(s, 3, 1) + qx(s, 3, 0)).abs();
+    // l[k][i]: line k, i = 0..4 -> p3, p2, p1, p0 and i = 4..8 -> q0, q1, q2, q3
+    let mut l = [[0i32; 8]; 4];
+    let Some(start) = o.checked_sub(4 * step) else { return };
+    if step == 1 {
+        for (k, line) in l.iter_mut().enumerate() {
+            let Some(src) = s.get(start + k * along..).and_then(|v| v.first_chunk::<8>()) else { return };
+            for (d, &v) in line.iter_mut().zip(src) {
+                *d = v as i32;
+            }
+        }
+    } else {
+        for i in 0..8 {
+            let Some(src) = s.get(start + i * step..).and_then(|v| v.first_chunk::<4>()) else { return };
+            for (k, &v) in src.iter().enumerate() {
+                l[k][i] = v as i32;
+            }
+        }
+    }
+    if !filter_luma_lines(&mut l, tc, beta, nfp, nfq, bd) {
+        return;
+    }
+    if step == 1 {
+        for (k, line) in l.iter().enumerate() {
+            let Some(dst) = s.get_mut(start + k * along..).and_then(|v| v.first_chunk_mut::<8>()) else { return };
+            for (d, &v) in dst.iter_mut().zip(line) {
+                *d = v as u16;
+            }
+        }
+    } else {
+        for i in 1..7 {
+            let Some(dst) = s.get_mut(start + i * step..).and_then(|v| v.first_chunk_mut::<4>()) else { return };
+            for (k, d) in dst.iter_mut().enumerate() {
+                *d = l[k][i] as u16;
+            }
+        }
+    }
+}
+
+/// The luma edge filter (8.7.2.5.3 decisions, 8.7.2.5.7 filtering) on the lines of
+/// [`filter_luma`]; false when the edge is left unfiltered (d >= beta).
+fn filter_luma_lines(l: &mut [[i32; 8]; 4], tc: i32, beta: i32, nfp: bool, nfq: bool, bd: u32) -> bool {
+    let px = |l: &[[i32; 8]; 4], k: usize, i: usize| l[k][3 - i];
+    let qx = |l: &[[i32; 8]; 4], k: usize, i: usize| l[k][4 + i];
+    let dp0 = (px(l, 0, 2) - 2 * px(l, 0, 1) + px(l, 0, 0)).abs();
+    let dp3 = (px(l, 3, 2) - 2 * px(l, 3, 1) + px(l, 3, 0)).abs();
+    let dq0 = (qx(l, 0, 2) - 2 * qx(l, 0, 1) + qx(l, 0, 0)).abs();
+    let dq3 = (qx(l, 3, 2) - 2 * qx(l, 3, 1) + qx(l, 3, 0)).abs();
     let (dpq0, dpq3) = (dp0 + dq0, dp3 + dq3);
     let (dp, dq) = (dp0 + dp3, dq0 + dq3);
     let d = dpq0 + dpq3;
     if d >= beta {
-        return;
+        return false;
     }
-    let dsam = |s: &[u16], k: usize, dpq: i32| -> bool {
+    let dsam = |l: &[[i32; 8]; 4], k: usize, dpq: i32| -> bool {
         dpq < (beta >> 2)
-            && (px(s, k, 3) - px(s, k, 0)).abs() + (qx(s, k, 0) - qx(s, k, 3)).abs() < (beta >> 3)
-            && (px(s, k, 0) - qx(s, k, 0)).abs() < ((5 * tc + 1) >> 1)
+            && (px(l, k, 3) - px(l, k, 0)).abs() + (qx(l, k, 0) - qx(l, k, 3)).abs() < (beta >> 3)
+            && (px(l, k, 0) - qx(l, k, 0)).abs() < ((5 * tc + 1) >> 1)
     };
-    let strong = dsam(s, 0, 2 * dpq0) && dsam(s, 3, 2 * dpq3);
+    let strong = dsam(l, 0, 2 * dpq0) && dsam(l, 3, 2 * dpq3);
     let dep = dp < ((beta + (beta >> 1)) >> 3);
     let deq = dq < ((beta + (beta >> 1)) >> 3);
     let max = (1i32 << bd) - 1;
-    for k in 0..4 {
-        let base = o + k * along;
-        let p = |i: usize| s[base - (i + 1) * step] as i32;
-        let q = |i: usize| s[base + i * step] as i32;
-        let (p0, p1, p2, p3) = (p(0), p(1), p(2), p(3));
-        let (q0, q1, q2, q3) = (q(0), q(1), q(2), q(3));
+    for line in l.iter_mut() {
+        let [p3, p2, p1, p0, q0, q1, q2, q3] = *line;
         if strong {
             let t2 = 2 * tc;
             if !nfp {
-                s[base - step] = ((p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3).clamp(p0 - t2, p0 + t2) as u16;
-                s[base - 2 * step] = ((p2 + p1 + p0 + q0 + 2) >> 2).clamp(p1 - t2, p1 + t2) as u16;
-                s[base - 3 * step] = ((2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3).clamp(p2 - t2, p2 + t2) as u16;
+                line[3] = ((p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3).clamp(p0 - t2, p0 + t2);
+                line[2] = ((p2 + p1 + p0 + q0 + 2) >> 2).clamp(p1 - t2, p1 + t2);
+                line[1] = ((2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3).clamp(p2 - t2, p2 + t2);
             }
             if !nfq {
-                s[base] = ((p1 + 2 * p0 + 2 * q0 + 2 * q1 + q2 + 4) >> 3).clamp(q0 - t2, q0 + t2) as u16;
-                s[base + step] = ((p0 + q0 + q1 + q2 + 2) >> 2).clamp(q1 - t2, q1 + t2) as u16;
-                s[base + 2 * step] = ((p0 + q0 + q1 + 3 * q2 + 2 * q3 + 4) >> 3).clamp(q2 - t2, q2 + t2) as u16;
+                line[4] = ((p1 + 2 * p0 + 2 * q0 + 2 * q1 + q2 + 4) >> 3).clamp(q0 - t2, q0 + t2);
+                line[5] = ((p0 + q0 + q1 + q2 + 2) >> 2).clamp(q1 - t2, q1 + t2);
+                line[6] = ((p0 + q0 + q1 + 3 * q2 + 2 * q3 + 4) >> 3).clamp(q2 - t2, q2 + t2);
             }
         } else {
             let mut delta = (9 * (q0 - p0) - 3 * (q1 - p1) + 8) >> 4;
@@ -275,21 +320,22 @@ fn filter_luma(s: &mut [u16], o: usize, step: usize, along: usize, tc: i32, beta
             }
             delta = delta.clamp(-tc, tc);
             if !nfp {
-                s[base - step] = (p0 + delta).clamp(0, max) as u16;
+                line[3] = (p0 + delta).clamp(0, max);
             }
             if !nfq {
-                s[base] = (q0 - delta).clamp(0, max) as u16;
+                line[4] = (q0 - delta).clamp(0, max);
             }
             if dep && !nfp {
                 let dp = ((((p2 + p0 + 1) >> 1) - p1 + delta) >> 1).clamp(-(tc >> 1), tc >> 1);
-                s[base - 2 * step] = (p1 + dp).clamp(0, max) as u16;
+                line[2] = (p1 + dp).clamp(0, max);
             }
             if deq && !nfq {
                 let dq = ((((q2 + q0 + 1) >> 1) - q1 - delta) >> 1).clamp(-(tc >> 1), tc >> 1);
-                s[base + step] = (q1 + dq).clamp(0, max) as u16;
+                line[5] = (q1 + dq).clamp(0, max);
             }
         }
     }
+    true
 }
 
 /// Filter one 4-sample chroma edge segment.
@@ -595,4 +641,111 @@ fn publish_row(pic: &mut PicState, r: usize) {
     let _ = (w, cw, c0, c1);
     let row = FrameRow { y: oy.into(), cb: ocb.into(), cr: ocr.into(), col: col.into() };
     pic.frame.publish(r, row);
+}
+
+#[cfg(test)]
+mod luma_filter_tests {
+    use super::*;
+
+    /// The luma edge filter as it was before reading the samples into an array (indexing the
+    /// picture sample by sample), as the reference.
+    #[allow(clippy::too_many_arguments)]
+    fn reference(s: &mut [u16], o: usize, step: usize, along: usize, tc: i32, beta: i32, nfp: bool, nfq: bool, bd: u32) {
+        let px = |s: &[u16], k: usize, i: usize| s[o + k * along - (i + 1) * step] as i32;
+        let qx = |s: &[u16], k: usize, i: usize| s[o + k * along + i * step] as i32;
+        let dp0 = (px(s, 0, 2) - 2 * px(s, 0, 1) + px(s, 0, 0)).abs();
+        let dp3 = (px(s, 3, 2) - 2 * px(s, 3, 1) + px(s, 3, 0)).abs();
+        let dq0 = (qx(s, 0, 2) - 2 * qx(s, 0, 1) + qx(s, 0, 0)).abs();
+        let dq3 = (qx(s, 3, 2) - 2 * qx(s, 3, 1) + qx(s, 3, 0)).abs();
+        let (dpq0, dpq3) = (dp0 + dq0, dp3 + dq3);
+        let (dp, dq) = (dp0 + dp3, dq0 + dq3);
+        let d = dpq0 + dpq3;
+        if d >= beta {
+            return;
+        }
+        let dsam = |s: &[u16], k: usize, dpq: i32| -> bool {
+            dpq < (beta >> 2)
+                && (px(s, k, 3) - px(s, k, 0)).abs() + (qx(s, k, 0) - qx(s, k, 3)).abs() < (beta >> 3)
+                && (px(s, k, 0) - qx(s, k, 0)).abs() < ((5 * tc + 1) >> 1)
+        };
+        let strong = dsam(s, 0, 2 * dpq0) && dsam(s, 3, 2 * dpq3);
+        let dep = dp < ((beta + (beta >> 1)) >> 3);
+        let deq = dq < ((beta + (beta >> 1)) >> 3);
+        let max = (1i32 << bd) - 1;
+        for k in 0..4 {
+            let base = o + k * along;
+            let p = |i: usize| s[base - (i + 1) * step] as i32;
+            let q = |i: usize| s[base + i * step] as i32;
+            let (p0, p1, p2, p3) = (p(0), p(1), p(2), p(3));
+            let (q0, q1, q2, q3) = (q(0), q(1), q(2), q(3));
+            if strong {
+                let t2 = 2 * tc;
+                if !nfp {
+                    s[base - step] = ((p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3).clamp(p0 - t2, p0 + t2) as u16;
+                    s[base - 2 * step] = ((p2 + p1 + p0 + q0 + 2) >> 2).clamp(p1 - t2, p1 + t2) as u16;
+                    s[base - 3 * step] = ((2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3).clamp(p2 - t2, p2 + t2) as u16;
+                }
+                if !nfq {
+                    s[base] = ((p1 + 2 * p0 + 2 * q0 + 2 * q1 + q2 + 4) >> 3).clamp(q0 - t2, q0 + t2) as u16;
+                    s[base + step] = ((p0 + q0 + q1 + q2 + 2) >> 2).clamp(q1 - t2, q1 + t2) as u16;
+                    s[base + 2 * step] = ((p0 + q0 + q1 + 3 * q2 + 2 * q3 + 4) >> 3).clamp(q2 - t2, q2 + t2) as u16;
+                }
+            } else {
+                let mut delta = (9 * (q0 - p0) - 3 * (q1 - p1) + 8) >> 4;
+                if delta.abs() >= tc * 10 {
+                    continue;
+                }
+                delta = delta.clamp(-tc, tc);
+                if !nfp {
+                    s[base - step] = (p0 + delta).clamp(0, max) as u16;
+                }
+                if !nfq {
+                    s[base] = (q0 - delta).clamp(0, max) as u16;
+                }
+                if dep && !nfp {
+                    let dp = ((((p2 + p0 + 1) >> 1) - p1 + delta) >> 1).clamp(-(tc >> 1), tc >> 1);
+                    s[base - 2 * step] = (p1 + dp).clamp(0, max) as u16;
+                }
+                if deq && !nfq {
+                    let dq = ((((q2 + q0 + 1) >> 1) - q1 - delta) >> 1).clamp(-(tc >> 1), tc >> 1);
+                    s[base + step] = (q1 + dq).clamp(0, max) as u16;
+                }
+            }
+        }
+    }
+
+    /// Same samples out of the gathered-block filter as out of the reference, for vertical and
+    /// horizontal edges, strong and weak filtering, both bit depths and the no-filter flags.
+    #[test]
+    fn gathered_luma_filter_matches_the_per_sample_filter() {
+        let mut rng = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let w = 16usize;
+        let mut filtered = 0;
+        for case in 0..4000 {
+            let bd = if case % 2 == 0 { 8 } else { 10 };
+            let max = (1u64 << bd) - 1;
+            // smooth blocks (strong filtering) to noisy ones (no filtering)
+            let base = next() % (max + 1);
+            let spread = [0u64, 2, 8, 64, max][case % 5];
+            let plane: Vec<u16> = (0..w * w).map(|_| (base + next() % (spread + 1)).min(max) as u16).collect();
+            let tc = (next() % 40) as i32;
+            let beta = (next() % 120) as i32;
+            let (nfp, nfq) = (next() % 4 == 0, next() % 4 == 0);
+            for vertical in [true, false] {
+                let (o, step, along) = if vertical { (4 * w + 8, 1, w) } else { (8 * w + 4, w, 1) };
+                let (mut a, mut b) = (plane.clone(), plane.clone());
+                filter_luma(&mut a, o, step, along, tc, beta, nfp, nfq, bd);
+                reference(&mut b, o, step, along, tc, beta, nfp, nfq, bd);
+                assert_eq!(a, b, "case {case} vertical {vertical}");
+                filtered += (a != plane) as usize;
+            }
+        }
+        assert!(filtered > 1000, "only {filtered} edges filtered");
+    }
 }

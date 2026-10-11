@@ -1448,6 +1448,21 @@ impl<'a> SliceDecoder<'a> {
         let bi = f.pred(0) && f.pred(1);
         for c in 0..3 {
             let (x, y, bw, bh, bd) = if c == 0 { (xp, yp, w, h, self.pic.bd_y) } else { (xp / 2, yp / 2, w / 2, h / 2, self.pic.bd_c) };
+            // Uni-prediction at a full-sample position without weighting: the prediction
+            // ((s << shift3) + off) >> shift3 (8-228, 8-262) is the reference sample itself.
+            if !bi && !weighted {
+                let l = if f.pred(0) { 0 } else { 1 };
+                let frac = if c == 0 { 3 } else { 7 };
+                let mv = f.mv[l];
+                if f.pred(l) && mv[0] & frac == 0 && mv[1] & frac == 0 {
+                    let sh = if c == 0 { 2 } else { 3 };
+                    let stride = if c == 0 { self.pic.width } else { self.pic.cwidth };
+                    let frame = &self.refs[l][f.ref_idx[l] as usize].frame;
+                    let dst = &mut self.pic.planes[c][y as usize * stride + x as usize..];
+                    frame.copy_block(c, x + (mv[0] as i32 >> sh), y + (mv[1] as i32 >> sh), bw, bh, dst, stride);
+                    continue;
+                }
+            }
             let mut lists = [false; 2];
             for l in 0..2 {
                 if !f.pred(l) {
