@@ -229,6 +229,37 @@ fn matroska_prores_pcm() {
     check_mkv("blue_prores_pcm.mkv", &["-c:v", "prores_ks", "-profile:v", "2"], &["-c:a", "pcm_s16le"]);
 }
 
+/// `bytes` with its first `DefaultDuration` element (0x23E383) overwritten by an EBML Void of the
+/// same length, as a muxer that leaves the optional element out would write the track.
+fn without_default_duration(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let at = out.windows(3).position(|w| w == [0x23, 0xE3, 0x83]).expect("DefaultDuration");
+    // ffmpeg writes a one-byte size (0x80 | n)
+    let total = 4 + (out[at + 3] & 0x7F) as usize;
+    out[at] = 0xEC;
+    out[at + 1] = 0x80 | (total - 2) as u8;
+    out[at + 2..at + total].fill(0);
+    out
+}
+
+#[test]
+fn matroska_reordered_video_without_default_duration_keeps_its_rate() {
+    // blocks are in decode order, so B-frames put file neighbours 2–3 frames apart (#923)
+    for (bf, name) in [(0, "rate25_bf0.mkv"), (1, "rate25_bf1.mkv"), (2, "rate25_bf2.mkv")] {
+        let params = format!("bframes={bf}:b-adapt=0:b-pyramid=0:keyint=250:scenecut=0");
+        let args =
+            ["-f", "lavfi", "-i", "testsrc2=size=64x48:rate=25", "-frames:v", "25", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-x264-params", &params, "-an"];
+        let Some(control) = fixture(name, &args) else { return };
+        let stripped = without_default_duration(&control);
+        for (label, bytes) in [("with DefaultDuration", control.to_vec()), ("without", stripped)] {
+            let src = crate::open_bytes(name, bytes.into()).expect("open");
+            let rate = src.info().video.as_ref().expect("video").frame_rate;
+            assert_eq!((rate.num, rate.den), (25, 1), "{bf} B-frames, {label}");
+            assert_eq!(src.info().duration, Tick::from_rational(1, 1, 1), "{bf} B-frames, {label}");
+        }
+    }
+}
+
 /// Path of a fixture under `target/fixtures/codecs/`, generated with ffmpeg when missing
 /// (`None` when ffmpeg or the encoder is unavailable).
 fn fixture_path(name: &str, args: &[&str]) -> Option<PathBuf> {

@@ -358,7 +358,11 @@ impl MkvSource {
             let rate = match t.default_duration_ns {
                 Some(ns) if ns > 0 => FrameRate::from_f64(1e9 / ns as f64),
                 _ => {
-                    let mut d: Vec<i64> = t.samples.windows(2).take(240).map(|p| (p[1].pts - p[0].pts).abs()).filter(|d| *d > 0).collect();
+                    // blocks are stored in decode order: with B-frames, neighbours in the file are
+                    // up to a few frames apart, so step between presentation times (#923)
+                    let mut pts: Vec<i64> = t.samples.iter().take(241).map(|s| s.pts).collect();
+                    pts.sort_unstable();
+                    let mut d: Vec<i64> = pts.windows(2).map(|p| p[1].saturating_sub(p[0])).filter(|d| *d > 0).collect();
                     d.sort_unstable();
                     let (n, dd) = tb(t);
                     let step = d.get(d.len() / 2).copied().unwrap_or(1).max(1) as f64 * n as f64 / dd as f64;
