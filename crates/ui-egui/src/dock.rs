@@ -1,6 +1,7 @@
 //! Premiere-style docking: a tree of splits and tab groups. Panels are rounded frames separated by
 //! thin gutters; each group has a tab strip (active tab bright, with a panel menu "≡"); the focused
-//! panel gets a blue outline. Gutters drag to resize; workspaces are serialized trees.
+//! panel gets a blue outline. Tabs drag between groups or split them; gutters resize them.
+//! Workspaces are serialized trees.
 
 use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -153,6 +154,25 @@ pub enum DockNode {
         panels: Vec<PanelKind>,
         active: usize,
     },
+}
+
+/// A panel joins a tab group, changes tab order, or splits the destination group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Placement {
+    Tab,
+    Before,
+    After,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Copy)]
+struct PanelDrag {
+    panel: PanelKind,
+    sequence: bool,
 }
 
 fn tabs(p: &[PanelKind], active: usize) -> DockNode {
@@ -313,6 +333,80 @@ pub fn workspace(name: &str) -> DockNode {
 }
 
 impl DockNode {
+    /// Move atomically by panel identity: removing an empty source group can change tree paths.
+    /// Reject malformed or excessively nested layouts before cloning or recursively editing them.
+    pub fn move_panel(&mut self, panel: PanelKind, target: PanelKind, placement: Placement) -> Result<bool, String> {
+        fn validate(n: &DockNode, depth: usize, nodes: &mut usize, seen: &mut Vec<PanelKind>) -> Result<(), String> {
+            *nodes = nodes.saturating_add(1);
+            if depth > 32 || *nodes > 256 {
+                return Err("the panel layout is too large or deeply nested".into());
+            }
+            match n {
+                DockNode::Split { a, b, .. } => {
+                    validate(a, depth + 1, nodes, seen)?;
+                    validate(b, depth + 1, nodes, seen)
+                }
+                DockNode::Tabs { panels, .. } => {
+                    for p in panels {
+                        if seen.contains(p) {
+                            return Err("the panel layout contains a duplicate panel".into());
+                        }
+                        seen.push(*p);
+                    }
+                    Ok(())
+                }
+            }
+        }
+        let mut panels = Vec::new();
+        validate(self, 0, &mut 0, &mut panels)?;
+        if !panels.contains(&panel) || !panels.contains(&target) {
+            return Err("both panels must be open before moving a panel".into());
+        }
+        if panel == target {
+            return Ok(false);
+        }
+        fn insert(n: &mut DockNode, panel: PanelKind, target: PanelKind, placement: Placement) -> bool {
+            match n {
+                DockNode::Split { a, b, .. } => insert(a, panel, target, placement) || insert(b, panel, target, placement),
+                DockNode::Tabs { panels, active } => {
+                    let Some(index) = panels.iter().position(|p| *p == target) else { return false };
+                    match placement {
+                        Placement::Tab | Placement::Before | Placement::After => {
+                            let at = match placement {
+                                Placement::Before => index,
+                                Placement::After => index + 1,
+                                _ => panels.len(),
+                            };
+                            panels.insert(at, panel);
+                            *active = at;
+                        }
+                        _ => {
+                            let old = std::mem::replace(n, tabs(&[panel], 0));
+                            let new = tabs(&[panel], 0);
+                            let (a, b) = if matches!(placement, Placement::Left | Placement::Top) { (new, old) } else { (old, new) };
+                            *n = DockNode::Split {
+                                vertical: matches!(placement, Placement::Top | Placement::Bottom),
+                                size: SplitSize::Ratio(0.5),
+                                a: Box::new(a),
+                                b: Box::new(b),
+                            };
+                        }
+                    }
+                    true
+                }
+            }
+        }
+        let mut next = self.clone();
+        next.close(panel);
+        if !insert(&mut next, panel, target, placement) {
+            return Err("the destination panel is no longer open".into());
+        }
+        validate(&next, 0, &mut 0, &mut Vec::new())?;
+        let changed = *self != next;
+        *self = next;
+        Ok(changed)
+    }
+
     /// Every panel in the tree.
     pub fn panels(&self, out: &mut Vec<PanelKind>) {
         match self {
@@ -360,8 +454,9 @@ impl DockNode {
                 *self = (**a).clone();
             }
         } else if let DockNode::Tabs { panels, active } = self {
+            let shown = panels.get(*active).copied();
             panels.retain(|x| *x != p);
-            *active = (*active).min(panels.len().saturating_sub(1));
+            *active = shown.and_then(|p| panels.iter().position(|x| *x == p)).unwrap_or_else(|| (*active).min(panels.len().saturating_sub(1)));
         }
     }
     /// Put the Timeline panel back where the workspaces keep it (left of the audio meters) after
@@ -428,6 +523,7 @@ pub struct Group {
     pub content: Rect,
     pub panels: Vec<PanelKind>,
     pub active: usize,
+    pub tab_rects: Vec<(PanelKind, Rect)>,
 }
 
 /// Actions produced by interacting with the dock chrome.
@@ -442,6 +538,7 @@ pub enum DockAction {
     CloseSequence(u64),
     /// A sequence tab was dragged past a neighbour: its new place among the sequence tabs.
     MoveSequence(u64, usize),
+    MovePanel(PanelKind, PanelKind, Placement),
 }
 
 /// Size of a split's first child in `avail` points: the requested size, keeping both children at
@@ -464,7 +561,7 @@ pub fn layout(ui: &mut egui::Ui, node: &mut DockNode, rect: Rect, t: &Tokens, pa
         DockNode::Tabs { panels, active } => {
             let tab_h = if panels.len() == 1 && panels[0].compact() { 8.0 } else { t.tab_h };
             let content = Rect::from_min_max(pos2(rect.min.x, rect.min.y + tab_h), rect.max);
-            out.push(Group { path: path.to_string(), rect, content, panels: panels.clone(), active: *active });
+            out.push(Group { path: path.to_string(), rect, content, panels: panels.clone(), active: *active, tab_rects: Vec::new() });
         }
         DockNode::Split { vertical, size, a, b } => {
             let g = t.gap;
@@ -520,7 +617,7 @@ pub struct SeqTabs {
 
 pub fn draw_group_chrome(
     ui: &mut egui::Ui,
-    g: &Group,
+    g: &mut Group,
     focused: PanelKind,
     seqs: &SeqTabs,
     t: &Tokens,
@@ -532,6 +629,12 @@ pub fn draw_group_chrome(
     let active_panel = g.panels.get(g.active).copied();
     let compact = g.panels.len() == 1 && g.panels[0].compact();
     if compact {
+        if let Some(panel) = active_panel {
+            let grip = Rect::from_min_size(g.rect.min, vec2(g.rect.width(), 8.0));
+            let resp = ui.interact(grip, egui::Id::new(("panel-grip", panel)), Sense::click_and_drag());
+            resp.dnd_set_drag_payload(PanelDrag { panel, sequence: false });
+            reg.add(&format!("panel.tab.{}", panel.id()), grip, panel.title());
+        }
         // grip dots
         let c = pos2(g.rect.center().x, g.rect.min.y + 4.0);
         for dx in [-4.0, 0.0, 4.0] {
@@ -616,8 +719,10 @@ pub fn draw_group_chrome(
             // a sequence tab keeps its identity when the tabs are reordered under the pointer
             let resp = match tab.seq {
                 Some(id) => ui.interact(tab_rect, egui::Id::new(("tab-seq", g.path.clone(), id)), Sense::click_and_drag()),
-                None => ui.interact(tab_rect, egui::Id::new(("tab", g.path.clone(), i)), Sense::click()),
+                None => ui.interact(tab_rect, egui::Id::new(("tab", g.path.clone(), *p)), Sense::click_and_drag()),
             };
+            resp.dnd_set_drag_payload(PanelDrag { panel: *p, sequence: tab.seq.is_some() });
+            g.tab_rects.push((*p, tab_rect));
             if let Some(id) = tab.seq {
                 seq_rects.push((id, tab_rect));
                 if resp.dragged() {
@@ -684,6 +789,7 @@ pub fn draw_group_chrome(
         // Dragging a sequence tab sideways: it changes places with a neighbour when the pointer
         // passes that neighbour's middle.
         if let Some(id) = dragged
+            && ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| strip.expand2(vec2(0.0, 12.0)).contains(p))
             && let Some(px) = ui.input(|i| i.pointer.latest_pos()).map(|p| p.x)
             && let Some(at) = seq_rects.iter().position(|(s, _)| *s == id)
             && let Some(index) = seqs.open.iter().position(|(s, _)| *s == id)
@@ -747,6 +853,86 @@ pub fn draw_group_chrome(
     actions
 }
 
+/// Where a panel would land. Header drops reorder tabs; body edges split the group.
+fn drop_target(group: &Group, drag: PanelDrag, pos: egui::Pos2) -> Option<(PanelKind, Placement, Rect)> {
+    let moving = drag.panel;
+    if !group.rect.contains(pos) || group.rect.width() <= 0.0 || group.rect.height() <= 0.0 {
+        return None;
+    }
+    let target = group.panels.get(group.active).copied().filter(|p| *p != moving).or_else(|| group.panels.iter().copied().find(|p| *p != moving))?;
+    let rect = group.rect;
+    if pos.y < group.content.min.y {
+        if drag.sequence && group.panels.contains(&moving) {
+            return None;
+        }
+        // Sequence tabs share the Timeline panel. Reordering them must not
+        // also move Timeline beside another panel in a mixed tab group.
+        if group.tab_rects.iter().any(|(panel, tab)| *panel == moving && tab.contains(pos)) {
+            return None;
+        }
+        let candidate =
+            group.tab_rects.iter().filter(|(p, _)| *p != moving).min_by(|(_, a), (_, b)| (a.center().x - pos.x).abs().total_cmp(&(b.center().x - pos.x).abs()));
+        if let Some((target, tab)) = candidate {
+            let before = pos.x < tab.center().x;
+            let x = if before { tab.min.x } else { tab.max.x };
+            return Some((
+                *target,
+                if before { Placement::Before } else { Placement::After },
+                Rect::from_min_size(pos2(x - 2.0, tab.min.y), vec2(4.0, tab.height())),
+            ));
+        }
+        return Some((target, Placement::Tab, rect));
+    }
+    let distances = [
+        ((pos.x - rect.min.x) / rect.width(), Placement::Left),
+        ((rect.max.x - pos.x) / rect.width(), Placement::Right),
+        ((pos.y - rect.min.y) / rect.height(), Placement::Top),
+        ((rect.max.y - pos.y) / rect.height(), Placement::Bottom),
+    ];
+    let (distance, edge) = distances.into_iter().min_by(|a, b| a.0.total_cmp(&b.0))?;
+    let placement = if distance < 0.22 { edge } else { Placement::Tab };
+    let preview = match placement {
+        Placement::Left => Rect::from_min_max(rect.min, pos2(rect.center().x, rect.max.y)),
+        Placement::Right => Rect::from_min_max(pos2(rect.center().x, rect.min.y), rect.max),
+        Placement::Top => Rect::from_min_max(rect.min, pos2(rect.max.x, rect.center().y)),
+        Placement::Bottom => Rect::from_min_max(pos2(rect.min.x, rect.center().y), rect.max),
+        _ => rect,
+    };
+    Some((target, placement, preview))
+}
+
+/// Draw on top of panel contents and commit only on release over a valid destination.
+pub fn panel_drop(ui: &mut egui::Ui, groups: &[Group], t: &Tokens, reg: &mut crate::automation::Registry) -> Option<DockAction> {
+    let payload = egui::DragAndDrop::payload::<PanelDrag>(ui.ctx())?;
+    let pos = ui.input(|i| i.pointer.latest_pos())?;
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("panel-docking-preview")));
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    let destination = groups.iter().find_map(|g| drop_target(g, *payload, pos));
+    if let Some((target, placement, preview)) = destination {
+        painter.rect_filled(preview, 3.0, t.focus.gamma_multiply(0.25));
+        painter.rect_stroke(preview, 3.0, Stroke::new(2.0, t.focus), StrokeKind::Inside);
+        let name = match placement {
+            Placement::Tab => "tab",
+            Placement::Before => "before",
+            Placement::After => "after",
+            Placement::Left => "left",
+            Placement::Right => "right",
+            Placement::Top => "top",
+            Placement::Bottom => "bottom",
+        };
+        reg.add(&format!("dock.drop.{}.{name}", target.id()), preview, target.title());
+        if ui.input(|i| i.pointer.primary_released()) {
+            egui::DragAndDrop::take_payload::<PanelDrag>(ui.ctx());
+            return Some(DockAction::MovePanel(payload.panel, target, placement));
+        }
+    }
+    if ui.input(|i| i.pointer.primary_down()) {
+        painter.text(pos + vec2(16.0, 18.0), Align2::LEFT_TOP, crate::i18n::t(payload.panel.title()), Tokens::ui(12.0), t.tab_text_active);
+        ui.ctx().request_repaint();
+    }
+    None
+}
+
 /// Placeholder body for panels that are not implemented yet.
 pub fn placeholder(ui: &mut egui::Ui, rect: Rect, t: &Tokens, text: &str) {
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, Tokens::ui(12.0), t.text_faint);
@@ -795,6 +981,55 @@ mod tests {
         let s = serde_json::to_string(&d).unwrap();
         let back: DockNode = serde_json::from_str(&s).unwrap();
         assert_eq!(back, d);
+    }
+
+    #[test]
+    fn panel_moves_preserve_all_panels_and_collapse_empty_sources() {
+        for placement in [Placement::Tab, Placement::Before, Placement::After, Placement::Left, Placement::Right, Placement::Top, Placement::Bottom] {
+            let mut dock = hsplit(SplitSize::Ratio(0.3), tabs(&[PanelKind::Effects], 0), tabs(&[PanelKind::Program, PanelKind::Properties], 1));
+            assert!(dock.move_panel(PanelKind::Effects, PanelKind::Program, placement).unwrap());
+            let mut panels = Vec::new();
+            dock.panels(&mut panels);
+            assert_eq!(panels.len(), 3);
+            for p in [PanelKind::Effects, PanelKind::Program, PanelKind::Properties] {
+                assert_eq!(panels.iter().filter(|v| **v == p).count(), 1);
+            }
+            assert!(dock.is_visible(PanelKind::Effects));
+            match placement {
+                Placement::Before => assert_eq!(panels, [PanelKind::Effects, PanelKind::Program, PanelKind::Properties]),
+                Placement::After => assert_eq!(panels, [PanelKind::Program, PanelKind::Effects, PanelKind::Properties]),
+                Placement::Tab => assert_eq!(panels, [PanelKind::Program, PanelKind::Properties, PanelKind::Effects]),
+                Placement::Left | Placement::Top => assert_eq!(panels[0], PanelKind::Effects),
+                _ => assert_eq!(panels[2], PanelKind::Effects),
+            }
+            let encoded = serde_json::to_string(&dock).unwrap();
+            assert_eq!(serde_json::from_str::<DockNode>(&encoded).unwrap(), dock);
+        }
+    }
+
+    #[test]
+    fn same_group_reordering_and_rejected_moves_are_atomic() {
+        let mut dock = tabs(&[PanelKind::Effects, PanelKind::Project, PanelKind::Info], 1);
+        dock.close(PanelKind::Effects);
+        assert!(dock.is_visible(PanelKind::Project), "removing an earlier inactive tab preserves the shown panel");
+        dock.open_near(PanelKind::Effects, PanelKind::Project);
+        dock.move_panel(PanelKind::Effects, PanelKind::Project, Placement::Before).unwrap();
+        assert_eq!(dock, tabs(&[PanelKind::Effects, PanelKind::Project, PanelKind::Info], 0));
+        let before = dock.clone();
+        assert!(!dock.move_panel(PanelKind::Effects, PanelKind::Effects, Placement::Right).unwrap());
+        assert!(dock.move_panel(PanelKind::Effects, PanelKind::Program, Placement::Tab).is_err());
+        assert_eq!(dock, before);
+        let mut duplicate = tabs(&[PanelKind::Effects, PanelKind::Effects, PanelKind::Program], 0);
+        let before = duplicate.clone();
+        assert!(duplicate.move_panel(PanelKind::Effects, PanelKind::Program, Placement::Tab).is_err());
+        assert_eq!(duplicate, before);
+        let mut deep = tabs(&[PanelKind::Effects, PanelKind::Program], 0);
+        for _ in 0..34 {
+            deep = hsplit(SplitSize::Ratio(0.5), tabs(&[], 0), deep);
+        }
+        let before = deep.clone();
+        assert!(deep.move_panel(PanelKind::Effects, PanelKind::Program, Placement::Right).is_err());
+        assert_eq!(deep, before);
     }
 
     /// #284: with Project and Program closed (or every panel closed) a panel still opens.

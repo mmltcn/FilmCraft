@@ -4,6 +4,27 @@
 and `.md` (options and sections: [testing.md](testing.md) §5). Agents read live counters with
 `perf.stats` ([control-protocol.md](control-protocol.md)).
 
+## Interactive builds and redraw work
+
+For interactive editing, build with `cargo build --release -p filmcraft --features whisper` and
+launch `target/release/filmcraft`. The development profile optimizes dependencies and codec hot
+loops, but still builds the editor at optimization level 1; it is not the release performance
+baseline. Keep the same build profile when comparing code changes.
+
+Timeline, Effect Controls, Markers, Captions and mixer drawing borrow a sequence from a shared
+immutable project snapshot instead of deep-copying its clips and effects on every redraw. Commands
+can still replace the session's project during the pass; the snapshot stays valid until drawing
+finishes. Transcript words and paragraphs are cached by project snapshot and displayed item, and
+search highlights by query. Playhead movement reuses them; project edits, undo/redo and view changes
+refresh them. Highlight lookup is constant work per word, including searches with many matches.
+
+To measure a long transcript, run
+`cargo test -p filmcraft-ui-egui --test transcript_ui long_transcript_redraw_benchmark -- --ignored --nocapture`
+alone. It reports median and p95 redraw time for 10,000 words with an empty query and a query matching
+every word. It measures UI update work, not native display presentation, and deliberately has no
+machine-dependent timing assertion. The transcript still lays out every word; list virtualization
+is future work.
+
 **Read the numbers with the load average.** These results come from a shared Apple M4 Pro
 (14 cores, 48 GB, macOS 15 / Darwin 24.6) with parallel agent builds running: load average
 **75–200** during every run below. Wall-clock columns (fps, shown/dropped frames, seek latency)

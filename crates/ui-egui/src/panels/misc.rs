@@ -61,7 +61,10 @@ pub const MARKER_FILTER: [filmcraft_project::Label; 7] = {
 /// `markers.filter.<label>`), then the sequence markers (`markers.row.<id>`; click = go to it).
 pub fn markers(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
-    let Some(seq) = app.session.active_sequence().cloned() else {
+    // Keep the immutable project snapshot alive while UI commands mutate the session.
+    // Cloning a sequence here copies every clip and effect on every redraw.
+    let project = app.session.project.clone();
+    let Some(seq) = app.session.state.active_sequence.and_then(|id| project.sequence(id)) else {
         crate::dock::placeholder(ui, rect, &t, tl!("(no sequence)"));
         return;
     };

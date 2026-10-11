@@ -32,6 +32,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("app.language.russian", "Русский", ["Edit", "Language"], None),
     uic!("app.language.french", "Français", ["Edit", "Language"], None),
     uic!("source.playback.toggle", "Source Play/Stop", [], None),
+    uic!("window.panel.move", "Move Panel", [], None),
     uic!("source.playback.play", "Play Source", [], None),
     uic!("source.playback.stop", "Stop Source", [], None),
     uic!("playback.toggle", "Play/Stop", [], Some("Space")),
@@ -171,6 +172,15 @@ pub fn targets_source(app: &FilmcraftApp, params: &Value) -> bool {
 
 /// Execute a UI or engine command by id.
 pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params: Value) -> Result<Value, String> {
+    if id == "file.import" {
+        params.as_object_mut().ok_or("command parameters must be an object")?.entry("transcriptionWait").or_insert(json!(false));
+    }
+
+    // UI operations must not block while speech models load or run. Headless callers retain
+    // their synchronous default and can explicitly opt into the same background jobs.
+    if matches!(id, "transcript.generate" | "transcript.downloadModel" | "transcript.identifySpeakers" | "sequence.transcribe") {
+        params.as_object_mut().ok_or("command parameters must be an object")?.entry("wait").or_insert(json!(false));
+    }
     if filmcraft_engine::source_monitor::source_command(id) && targets_source(app, &params) && params.get("target").is_none() {
         let object = params.as_object_mut().ok_or("command parameters must be an object")?;
         object.insert("target".into(), json!("source"));
@@ -233,6 +243,18 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
     if id == "perf.stats" {
         // the engine's counters plus playback, frame workers and UI timings
         return Ok(crate::perf::stats(app));
+    }
+    if id == "window.panel.move" {
+        let panel = params.get("panel").and_then(Value::as_str).and_then(PanelKind::from_name).ok_or("need a valid panel to move")?;
+        let target = params.get("target").and_then(Value::as_str).and_then(PanelKind::from_name).ok_or("need a valid destination panel")?;
+        let placement = params.get("placement").cloned().unwrap_or_else(|| json!("tab"));
+        let placement: crate::dock::Placement =
+            serde_json::from_value(placement).map_err(|_| "unknown panel placement (tab, before, after, left, right, top, bottom)")?;
+        let changed = app.ui.dock.move_panel(panel, target, placement)?;
+        app.ui.focused = panel;
+        app.ui.keys.maximized = None;
+        ctx.request_repaint();
+        return Ok(json!({"moved": changed}));
     }
     if let Some(rest) = id.strip_prefix("window.panel.") {
         let p = PanelKind::from_name(rest).ok_or_else(|| format!("unknown panel `{rest}`"))?;

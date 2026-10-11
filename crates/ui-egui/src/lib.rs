@@ -318,6 +318,7 @@ pub struct FilmcraftApp {
     pub shortcut_editor: panels::shortcuts_dialog::EditorState,
     pub toast: Option<(String, f64)>,
     pub tl: panels::timeline::TlState,
+    pub(crate) transcript_cache: panels::transcript_cache::TranscriptCache,
     /// Commands from outside the UI (native menu bar), invoked on the UI thread.
     pub command_inbox: Option<Receiver<String>>,
     /// A V key press (or a Ctrl+V paste) reached the app and its release hasn't yet.
@@ -533,6 +534,7 @@ impl FilmcraftApp {
             shortcut_editor: Default::default(),
             toast: None,
             tl: Default::default(),
+            transcript_cache: Default::default(),
             command_inbox: None,
             v_down: false,
             gpu: None,
@@ -1715,7 +1717,12 @@ impl FilmcraftApp {
         let p = ui.painter();
         p.rect_filled(bar, 3.0, t.separator);
         p.rect_filled(egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * f, bar.height())), 3.0, t.accent);
-        let verb = if job.label.starts_with("Rendering") { crate::i18n::t(&job.label).to_string() } else { tl!("Exporting").to_string() };
+        let verb = match job.label.as_str() {
+            "Transcribe" => tl!("Transcribe").to_string(),
+            "Download Speech Model" => tl!("Download model").to_string(),
+            label if label.starts_with("Rendering") => crate::i18n::t(label).to_string(),
+            _ => tl!("Exporting").to_string(),
+        };
         p.text(
             egui::pos2(bar.min.x - 8.0, sb.center().y),
             egui::Align2::RIGHT_CENTER,
@@ -1784,7 +1791,7 @@ impl FilmcraftApp {
                 .collect(),
             active: self.session.state.active_sequence.map(|i| i.0),
         };
-        for g in &groups {
+        for g in &mut groups {
             actions.extend(dock::draw_group_chrome(ui, g, self.ui.focused, &seqs, &t, &mut self.auto));
         }
         if maximized.is_none() {
@@ -1796,6 +1803,11 @@ impl FilmcraftApp {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(g.content).id_salt(("panel", p.id())));
             child.set_clip_rect(g.content);
             panels::show(self, &mut child, p, g.content);
+        }
+        if maximized.is_none()
+            && let Some(action) = dock::panel_drop(ui, &groups, &t, &mut self.auto)
+        {
+            actions.push(action);
         }
         for a in actions {
             match a {
@@ -1819,6 +1831,13 @@ impl FilmcraftApp {
                 dock::DockAction::MoveSequence(id, index) => {
                     if let Err(e) = self.session.execute("sequence.moveTab", json!({"item": id, "index": index})) {
                         self.ui.status = e.to_string();
+                    }
+                }
+                dock::DockAction::MovePanel(panel, target, placement) => {
+                    if let Err(e) =
+                        menus::invoke(self, ui.ctx(), "window.panel.move", json!({"panel": panel.title(), "target": target.title(), "placement": placement}))
+                    {
+                        self.ui.status = e;
                     }
                 }
                 dock::DockAction::PanelMenu(p, pos) => {

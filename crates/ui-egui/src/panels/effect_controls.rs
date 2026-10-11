@@ -99,7 +99,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         crate::dock::placeholder(ui, rect, &t, tl!("(no clip selected)"));
         return;
     };
-    let Some(seq) = app.session.active_sequence().cloned() else {
+    // Keep the immutable project snapshot alive while UI commands mutate the session.
+    // Cloning a sequence here copies every clip and effect on every redraw.
+    let project = app.session.project.clone();
+    let Some(seq) = app.session.state.active_sequence.and_then(|id| project.sequence(id)) else {
         crate::dock::placeholder(ui, rect, &t, tl!("(no sequences)"));
         return;
     };

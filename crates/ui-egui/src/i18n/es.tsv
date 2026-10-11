@@ -3551,6 +3551,26 @@
 	Composite on the GPU when available	Componer en la GPU cuando esté disponible
 	Text to Speech	Texto a voz
 	Edit Narration	Editar narración
+	Speech models	Modelos de voz
+	Installed	Instalado
+	Download model	Descargar modelo
+	Open a sequence or Source clip to see its transcript	Abre una secuencia o un clip de origen para ver su transcripción
+	Correct transcript word	Corregir palabra de la transcripción
+	Correct Transcript Word	Corregir palabra de la transcripción
+	Inspect Source Transcript	Inspeccionar transcripción de origen
+	Use model	Usar modelo
+
+	Assign passage to speaker	Asignar pasaje a un hablante
+	Assign to new speaker	Asignar a un nuevo hablante
+	Choose a passage from one source clip.	Elige un pasaje de un solo clip de origen.
+	Identify Speakers	Identificar hablantes
+	Maximum speakers	Máximo de hablantes
+	No speaker	Sin hablante
+	Rename speaker	Cambiar nombre del hablante
+	Replaces speaker names and assignments. Undo is available.	Reemplaza los nombres y las asignaciones de hablantes. Se puede deshacer.
+	Speaker name	Nombre del hablante
+	Speakers	Hablantes
+	Move Panel	Mover panel
 	Project Notes	Notas del proyecto
 	Get Project Notes	Obtener notas del proyecto
 	Edit Project Notes	Editar notas del proyecto
