@@ -540,7 +540,8 @@ fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option
                     None => ap.sample_rate as u32,
                 }
             },
-            if a.channel_config > 0 { a.channel_config as u32 } else { ap.channels },
+            // the configuration is an index (7 and 12 are both eight channels), not a count
+            if a.channels() > 0 { a.channels() } else { ap.channels },
             None,
         ),
         CodecConfig::Pcm(p) => (p.sample_rate as u32, p.channels, Some(p.bits as u32)),

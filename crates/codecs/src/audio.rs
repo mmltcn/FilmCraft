@@ -59,13 +59,16 @@ fn vorbis_to_wav_order(channels: usize) -> Option<&'static [usize]> {
 /// Channel order for AAC surround (ISO/IEC 14496-3 Table 1.19, our decoder's element order: C, L R,
 /// surrounds, LFE): output channel → decoded channel, giving the WAV/SMPTE order (L R C LFE Ls Rs)
 /// used elsewhere, as the AC-3 decoder does and the AAC encoder's caller undoes on export. Only the
-/// unambiguous channel configurations 3–6; 1, 2, 7 and PCE layouts keep the decoded order.
+/// unambiguous channel configurations 3–6, 11 (6.1: … LFE, back centre, sides) and 12 (7.1: … LFE,
+/// backs, sides); 1, 2, 7 and PCE layouts keep the decoded order.
 fn aac_to_wav_order(channel_config: u8) -> Option<&'static [usize]> {
     Some(match channel_config {
         3 => &[1, 2, 0],
         4 => &[1, 2, 0, 3],
         5 => &[1, 2, 0, 3, 4],
         6 => &[1, 2, 0, 5, 3, 4],
+        11 => &[1, 2, 0, 6, 5, 3, 4],
+        12 => &[1, 2, 0, 7, 5, 6, 3, 4],
         _ => return None,
     })
 }
