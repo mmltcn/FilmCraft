@@ -77,6 +77,13 @@ pub(crate) fn dec(c: [f32; 3]) -> [f32; 3] {
     [srgb_to_linear(c[0].clamp(0.0, 1.0)), srgb_to_linear(c[1].clamp(0.0, 1.0)), srgb_to_linear(c[2].clamp(0.0, 1.0))]
 }
 
+/// Stable seed for the *exact* frame timestamp. A fixed 30 Hz quantizer
+/// would reuse the same noise field at 60/120 fps and can repeat at 30 fps
+/// through floating-point rounding of seconds.
+pub(crate) fn noise_frame_seed(cx: &FxCtx) -> u64 {
+    cx.t.0 as u64
+}
+
 pub(crate) fn hash3(x: usize, y: usize, z: u64) -> f32 {
     let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ z.wrapping_mul(0x1656_67B1_9E37_79F9);
     h ^= h >> 31;
@@ -110,7 +117,7 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             let amt = f(e, "amount", cx) / 100.0;
             let colored = b(e, "color");
             let clip = b(e, "clip");
-            let frame = (cx.seconds * 30.0) as u64;
+            let frame = noise_frame_seed(cx);
             let w = img.w;
             img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
                 for x in 0..w {
