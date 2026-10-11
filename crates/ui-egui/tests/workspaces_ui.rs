@@ -25,8 +25,14 @@ struct Driver {
 impl Driver {
     /// The demo project with its preferences (and workspaces) in `data`.
     fn launch(data: &Path) -> Self {
+        Self::launch_with_demo(data, true)
+    }
+
+    fn launch_with_demo(data: &Path, demo: bool) -> Self {
         let mut session = Session::default();
-        session.execute("file.openDemoProject", json!({})).expect("demo project");
+        if demo {
+            session.execute("file.openDemoProject", json!({})).expect("demo project");
+        }
         session.prefs_path = Some(data.join("preferences.json"));
         let (tx, rx) = channel();
         let app = FilmcraftApp::new(session).with_control(rx);
@@ -143,6 +149,110 @@ fn data_dir(name: &str) -> PathBuf {
 
 fn saved_file(data: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(data.join("workspaces.json")).expect("workspaces.json written")).unwrap()
+}
+
+#[test]
+fn drag_dock_and_automatic_restart_restore() {
+    let data = data_dir("drag-restore");
+    let mut d = Driver::launch(&data);
+    let original = d.app().ui.dock.clone();
+    d.ok("ui.drag", json!({"from": {"id": "panel.tab.Project"}, "to": {"id": "panel.Program", "fx": 0.5, "fy": 0.5}, "steps": 8}));
+    d.frames(3);
+    let grouped = d.app().ui.dock.clone();
+    assert_ne!(original, grouped);
+    assert!(grouped.is_visible(PanelKind::Project));
+    assert!(!grouped.is_visible(PanelKind::Program), "center drop groups the tabs");
+    d.ok("ui.drag", json!({"from": {"id": "panel.drag.Project"}, "to": {"id": "panel.Timeline", "fx": 0.95, "fy": 0.5}, "steps": 8}));
+    d.frames(3);
+    let split = d.app().ui.dock.clone();
+    assert_ne!(grouped, split);
+    assert!(split.is_visible(PanelKind::Project) && split.is_visible(PanelKind::Timeline));
+    let sequences = d.app().session.state.open_sequences.clone();
+    d.ok("ui.drag", json!({"from": {"id": "panel.drag.Timeline"}, "to": {"id": "panel.Program", "fx": 0.5, "fy": 0.5}, "steps": 8}));
+    d.frames(3);
+    assert_eq!(d.app().session.state.open_sequences, sequences, "moving Timeline must not reorder or close sequences");
+    assert!(!d.app().ui.dock.is_visible(PanelKind::Program));
+    let split = d.app().ui.dock.clone();
+    d.snapshot("dragged-layout");
+    assert_eq!(saved_file(&data)["currentLayout"], serde_json::to_value(&split).unwrap());
+    drop(d);
+    let mut d = Driver::launch(&data);
+    assert_eq!(d.app().ui.dock, split, "no explicit Save needed before relaunch");
+    d.menu("window.workspace.reset", json!({}));
+    assert_eq!(d.app().ui.dock, original, "autosave must not overwrite explicit reset checkpoint");
+}
+
+#[test]
+fn autosave_failure_keeps_last_good_layout_and_retries() {
+    let data = data_dir("retry");
+    let mut d = Driver::launch(&data);
+    let original = saved_file(&data);
+    // A regular file as the parent produces a deterministic failure even when tests run as root.
+    d.app().session.prefs_path = Some(data.join("workspaces.json/preferences.json"));
+    d.ok("ui.panel.close", json!({"panel": "Metadata"}));
+    assert!(d.app().ui.status.contains("saving workspaces"));
+    assert_eq!(saved_file(&data), original);
+    d.app().session.prefs_path = Some(data.join("preferences.json"));
+    let time = d.harness.ctx.input(|i| i.time);
+    d.harness.input_mut().time = Some(time + 3.0);
+    d.frames(3);
+    assert_eq!(saved_file(&data)["currentLayout"], serde_json::to_value(&d.app().ui.dock).unwrap());
+    drop(d);
+    assert!(!Driver::launch(&data).shows(PanelKind::Metadata));
+}
+
+#[test]
+fn intentionally_empty_workspace_survives_restart_and_can_reopen_panels() {
+    let data = data_dir("empty");
+    // Opening a project intentionally reopens Timeline via OpenSequence (#284), independently
+    // of saved layout. Check a launch without that separate project-open command here.
+    let mut d = Driver::launch_with_demo(&data, false);
+    let mut panels = Vec::new();
+    d.app().ui.dock.panels(&mut panels);
+    for panel in panels {
+        d.app().ui.dock.close(panel);
+    }
+    d.frames(3);
+    let empty = d.app().ui.dock.clone();
+    drop(d);
+    let mut d = Driver::launch_with_demo(&data, false);
+    assert_eq!(d.app().ui.dock, empty);
+    d.ok("ui.panel.show", json!({"panel": "Program"}));
+    assert!(d.shows(PanelKind::Program));
+}
+
+#[test]
+fn compact_grip_drag_preview_and_escape_cancel() {
+    let data = data_dir("cancel");
+    let mut d = Driver::launch(&data);
+    let original = d.app().ui.dock.clone();
+    let center = |d: &mut Driver, id: &str| {
+        let elements = d.ok("ui.elements", json!({"prefix": id}));
+        let r = &elements.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap()["rect"];
+        egui::pos2((r[0].as_f64().unwrap() + r[2].as_f64().unwrap() * 0.5) as f32, (r[1].as_f64().unwrap() + r[3].as_f64().unwrap() * 0.5) as f32)
+    };
+    let from = center(&mut d, "panel.drag.Tools");
+    let to = center(&mut d, "panel.Program");
+    for event in [
+        egui::Event::PointerMoved(from),
+        egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        egui::Event::PointerMoved(to),
+    ] {
+        d.harness.input_mut().events.push(event);
+        d.frames(2);
+    }
+    assert!(d.has("dock.drop"));
+    assert_eq!(d.app().ui.dock, original, "preview must not mutate the dock");
+    d.snapshot("drop-preview");
+    d.ok("ui.key", json!({"key": "Escape"}));
+    d.harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    d.frames(3);
+    assert_eq!(d.app().ui.dock, original);
 }
 
 #[test]

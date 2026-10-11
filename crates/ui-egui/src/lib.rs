@@ -685,7 +685,9 @@ impl FilmcraftApp {
             // reopen the workspace in use when the app last closed
             self.workspace_restored = true;
             if let Some(w) = dock::find(&self.workspaces, &self.workspaces.current) {
-                self.set_workspace(&w);
+                let resume = self.workspaces.current_layout.as_ref().and_then(dock::checked_layout);
+                self.ui.dock = resume.unwrap_or_else(|| dock::saved_layout(&self.workspaces, &w));
+                self.ui.workspace = w;
             }
         }
         self.applied_prefs = Some(p);
@@ -751,11 +753,11 @@ impl FilmcraftApp {
 
     /// Replace the saved workspaces and write them to the data directory.
     pub fn set_workspaces(&mut self, w: dock::WorkspacePrefs) -> Result<(), String> {
-        self.workspaces = w;
-        match self.workspaces_path() {
-            Some(p) => self.workspaces.save(&p).map_err(|e| format!("saving workspaces: {e}")),
-            None => Ok(()),
+        if let Some(p) = self.workspaces_path() {
+            w.save(&p).map_err(|e| format!("saving workspaces: {e}"))?;
         }
+        self.workspaces = w;
+        Ok(())
     }
 
     pub fn set_workspace(&mut self, name: &str) {
@@ -763,12 +765,11 @@ impl FilmcraftApp {
         // a workspace is shown whole: no frame stays maximized over it
         self.ui.keys.maximized = None;
         self.ui.dock = dock::saved_layout(&self.workspaces, name);
-        if self.workspaces.current != name {
-            let mut next = self.workspaces.clone();
-            next.current = name.to_string();
-            if let Err(e) = self.set_workspaces(next) {
-                self.ui.status = e;
-            }
+        let mut next = self.workspaces.clone();
+        next.current = name.to_string();
+        next.current_layout = serde_json::to_value(&self.ui.dock).ok();
+        if let Err(e) = self.set_workspaces(next) {
+            self.ui.status = e;
         }
         if name == "Color" {
             self.ui.show_scopes = false;
@@ -1765,6 +1766,9 @@ impl FilmcraftApp {
         let t = self.tokens;
         // Maximize or Restore Frame (` / Shift+`): the maximized panel fills the dock area.
         let maximized = self.ui.keys.maximized.filter(|p| self.ui.dock.contains(*p));
+        if maximized.is_some() {
+            ui.ctx().data_mut(|d| d.remove::<PanelKind>(egui::Id::new("dock-drag")));
+        }
         let mut dock = match maximized {
             Some(p) => dock::DockNode::Tabs { panels: vec![p], active: 0 },
             None => std::mem::replace(&mut self.ui.dock, dock::DockNode::Tabs { panels: vec![], active: 0 }),
@@ -1832,6 +1836,32 @@ impl FilmcraftApp {
             }
         }
         panels::panel_menu_popup(self, ui);
+        if maximized.is_none()
+            && let Some((panel, target, placement)) = dock::panel_drop(ui, &groups, &t, &mut self.auto)
+            && self.ui.dock.move_panel(panel, target, placement)
+        {
+            self.ui.focused = panel;
+            ui.ctx().request_repaint();
+        }
+        // Commit only after gestures end, never for every gutter-drag frame. Explicit saved
+        // workspaces remain reset checkpoints; the working layout survives ordinary launches.
+        let retry_id = egui::Id::new("workspace-save-retry");
+        let now = ui.input(|i| i.time);
+        let retry_at = ui.ctx().data(|d| d.get_temp::<f64>(retry_id)).unwrap_or(0.0);
+        if !ui.input(|i| i.pointer.any_down())
+            && now >= retry_at
+            && let Ok(value) = serde_json::to_value(&self.ui.dock)
+            && self.workspaces.current_layout.as_ref() != Some(&value)
+        {
+            let mut next = self.workspaces.clone();
+            next.current = self.ui.workspace.clone();
+            next.current_layout = Some(value);
+            if let Err(error) = self.set_workspaces(next) {
+                self.ui.status = error;
+                ui.ctx().data_mut(|d| d.insert_temp(retry_id, now + 2.0));
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+            }
+        }
     }
 }
 

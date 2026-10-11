@@ -3,6 +3,19 @@
 The egui frontend draws panels and dialogs, and dispatches project changes through the engine.
 Interactive controls keep stable automation ids regardless of the interface language.
 
+## Rearranging the workspace
+
+Drag a panel tab (or its dotted grip) onto the center of another panel to group tabs, or onto
+an edge to split that area. The blue preview shows the destination; Escape or dropping outside
+the workspace cancels. Tools and Audio Meters use their top grip. Use Timeline's grip to move
+the panel; dragging sequence tabs still reorders sequences.
+
+The working arrangement, sizes and active tabs save automatically to `workspaces.json` when a
+gesture ends and reopen on the next launch. Explicit Window > Workspaces saves remain separate
+checkpoints, so Reset to Saved Layout still undoes arrangement changes. Automation exposes
+`panel.drag.<PanelKind>` grips and `dock.drop` previews alongside existing panel/tab ids.
+Floating windows are not included. See [validation and limitations](../../docs/workspace-layout-validation.md).
+
 ## Transition drop previews
 
 Dragging a video or audio transition over a compatible clip shows its actual time span, the
