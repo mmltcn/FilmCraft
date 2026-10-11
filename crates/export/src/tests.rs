@@ -75,6 +75,44 @@ fn mjpeg_mov_roundtrip() {
     }
 }
 
+/// GIF delays are centiseconds: 24 fps is 41.67 ms, so 4/4/5 cs keeps a 4.0 s sequence at 4000 ms.
+#[test]
+fn gif_frame_delays_sum_to_sequence_duration() {
+    let n = 96u64;
+    let duration = Tick(4 * TICKS_PER_SECOND);
+    let delays: Vec<u32> = (0..n).map(|i| gif_delay_cs(i, n, duration)).collect();
+    assert_eq!(delays.iter().copied().sum::<u32>(), 400, "{delays:?}");
+    assert!(delays.iter().all(|&d| d == 4 || d == 5), "{delays:?}");
+    assert_eq!(delays.iter().filter(|&&d| d == 5).count(), 16);
+}
+
+fn gif_gce_delays_cs(bytes: &[u8]) -> Vec<u16> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        if bytes[i] == 0x21 && bytes[i + 1] == 0xF9 && bytes[i + 2] == 0x04 {
+            out.push(u16::from_le_bytes([bytes[i + 4], bytes[i + 5]]));
+            i += 8;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+#[test]
+fn gif_export_delays_sum_to_range() {
+    let (p, seq, m) = project();
+    let path = tmp("dur.gif");
+    let mut s = ExportSettings { format: Format::Gif, path: path.clone(), scale: 0.25, ..Default::default() };
+    s.range = Some(TimeRange::new(Tick::ZERO, Tick(4 * TICKS_PER_SECOND)));
+    let r = export(&p, seq, &s, &m, &Progress::default()).unwrap();
+    assert_eq!(r.frames, 96);
+    let delays = gif_gce_delays_cs(&std::fs::read(&path).unwrap());
+    assert_eq!(delays.len(), 96, "{delays:?}");
+    assert_eq!(delays.iter().map(|&d| d as u32).sum::<u32>(), 400, "{delays:?}");
+}
+
 #[test]
 fn wav_png_gif() {
     let (p, seq, m) = project();

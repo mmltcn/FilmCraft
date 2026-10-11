@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use filmcraft_isobmff::SampleEntry;
 use filmcraft_project::{ItemId, Project};
 use filmcraft_render::SourceProvider;
-use filmcraft_time::{FrameRate, Tick, TimeRange};
+use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -1734,6 +1734,18 @@ pub fn encode_still_with_quality(format: Format, rgba: Vec<u8>, w: u32, h: u32, 
     Ok(out.into_inner())
 }
 
+/// GIF Graphic Control Extension delay is centiseconds. Truncating `1000/fps` ms (24 fps → 41.67 ms
+/// → 4 cs) shortens the loop; Bresenham-distribute so the delays sum to the range duration.
+pub(crate) fn gif_delay_cs(frame: u64, nframes: u64, duration: Tick) -> u32 {
+    let n = nframes.max(1) as u128;
+    let dur = duration.0.max(0) as u128;
+    let total_cs = dur.saturating_mul(100) / (TICKS_PER_SECOND as u128);
+    let f = frame as u128;
+    let a = total_cs.saturating_mul(f) / n;
+    let b = total_cs.saturating_mul(f.saturating_add(1)) / n;
+    (b.saturating_sub(a)).min(u32::MAX as u128) as u32
+}
+
 /// Run an export (blocking; call from a worker thread).
 pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, sources: &dyn SourceProvider, progress: &Progress) -> Result<Report> {
     settings.validate()?;
@@ -1809,7 +1821,6 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
             } else {
                 None
             };
-            let delay = image::Delay::from_numer_denom_ms((1000 * pipe.rate.den) as u32, pipe.rate.num as u32);
             let mut f = f0;
             while f < f1 {
                 if cancelled() {
@@ -1818,7 +1829,9 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
                 let end = (f + batch).min(f1);
                 if let Some(enc) = gif.as_mut() {
                     let frames: Vec<Vec<u8>> = (f..end).into_par_iter().map(|fi| pipe.frame(fi, sources).0).collect();
-                    for rgba in frames {
+                    for (i, rgba) in frames.into_iter().enumerate() {
+                        let cs = gif_delay_cs((f - f0) as u64 + i as u64, count, range.duration);
+                        let delay = image::Delay::from_numer_denom_ms(cs.saturating_mul(10), 1);
                         let img = image::RgbaImage::from_raw(w, h, rgba).ok_or_else(|| ExportError::Encode("frame".into()))?;
                         enc.encode_frame(image::Frame::from_parts(img, 0, 0, delay)).map_err(|e| ExportError::Encode(e.to_string()))?;
                     }
