@@ -760,6 +760,43 @@ fn media_browser_drag_imports_into_the_project_panel() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Dragging one of several selected Project items onto the Timeline places all of them, back to
+/// back, as one undo step; an item outside the selection goes alone.
+#[test]
+fn dragging_a_selection_to_the_timeline_places_every_item() {
+    let mut d = Driver::demo();
+    let (bin, items) = d.footage();
+    assert!(items.len() >= 3);
+    d.exec("file.newSequence", json!({"name": "Drop", "video": 2, "audio": 2}));
+    d.ok("ui.menu.invoke", json!({"id": "projectPanel.openBin", "params": {"bin": bin, "how": "inPlace"}}));
+    let card = |i: u64| format!("project.item.{i}");
+    d.wait_for(&card(items[0]));
+    let clips = |d: &mut Driver| d.app().session.active_sequence().map(|q| q.video_tracks.iter().map(|t| t.items.len()).sum::<usize>()).unwrap_or(0);
+    let steps = d.app().session.history.undo.len();
+    let drop = json!({"id": "timeline.tracks", "fx": 0.3, "fy": 0.1});
+
+    // an item that is not selected: one clip
+    d.exec("project.select", json!({"items": [items[2]]}));
+    d.ok("ui.drag", json!({"from": {"id": card(items[0])}, "to": drop, "steps": 16}));
+    d.frames(4);
+    assert_eq!(clips(&mut d), 1, "an unselected item goes alone");
+    d.exec("edit.undo", json!({}));
+
+    // two of the selection: both, back to back, in one undo step
+    d.exec("project.select", json!({"items": [items[0], items[1]]}));
+    d.frames(2);
+    d.ok("ui.drag", json!({"from": {"id": card(items[0])}, "to": drop, "steps": 16}));
+    d.frames(4);
+    assert_eq!(clips(&mut d), 2, "the whole selection is placed");
+    let mut v1: Vec<(i64, i64)> =
+        d.app().session.active_sequence().unwrap().video_tracks.iter().flat_map(|t| t.items.iter()).map(|i| (i.start.0, i.end().0)).collect();
+    v1.sort();
+    assert_eq!(v1[0].1, v1[1].0, "back to back");
+    assert_eq!(d.app().session.history.undo.len(), steps + 1, "the drag is one undo step");
+    d.exec("edit.undo", json!({}));
+    assert_eq!(clips(&mut d), 0);
+}
+
 /// Double-clicking empty space in the Project panel opens Import, also between and beside the
 /// Icon view's cards once the project has some. Only the strip under the last row used to answer,
 /// so with a project loaded a double-click in the visible blank space did nothing. Real pointer
@@ -1001,4 +1038,21 @@ fn marquee_selects_cards_in_freeform_view() {
     marquee(&mut d, (a[0] - 6.0, a[1] - 6.0), centre(b), false);
     assert_eq!(selection(&mut d), sorted(vec![i0, i1]));
     assert!(!d.app().session.project.item(ItemId(i0)).unwrap().metadata.contains_key(FREEFORM_POS), "the marquee moved no card");
+}
+
+/// The Project selection can hold a bin beside items (one id space). Dragging the items still
+/// places them: the bin is left out instead of failing the whole drop.
+#[test]
+fn a_bin_in_the_selection_does_not_stop_the_items_being_placed() {
+    let mut d = Driver::demo();
+    let (bin, items) = d.footage();
+    d.exec("file.newSequence", json!({"name": "Drop", "video": 2, "audio": 2}));
+    d.ok("ui.menu.invoke", json!({"id": "projectPanel.openBin", "params": {"bin": bin, "how": "inPlace"}}));
+    d.wait_for(&format!("project.item.{}", items[0]));
+    d.exec("project.select", json!({"items": [items[0], bin, items[1]]}));
+    d.frames(2);
+    d.ok("ui.drag", json!({"from": {"id": format!("project.item.{}", items[0])}, "to": {"id": "timeline.tracks", "fx": 0.3, "fy": 0.1}, "steps": 16}));
+    d.frames(4);
+    let clips = d.app().session.active_sequence().map(|q| q.video_tracks.iter().map(|t| t.items.len()).sum::<usize>()).unwrap_or(0);
+    assert_eq!(clips, 2, "status: {}", d.app().ui.status);
 }
