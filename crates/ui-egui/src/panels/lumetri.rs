@@ -51,13 +51,16 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mt = it.source_time_at(ph.clamp(it.start, it.end() - Tick(1)));
     let mut actions: Actions = Vec::new();
     // header: clip context + fx toggle
+    // the fx toggle is laid out first so a long clip name is truncated instead of widening the panel
     bui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tlf!("Master · {name}", name = it.name)).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let fx = ui.add(egui::Button::new(egui::RichText::new("fx").italics().color(if e.enabled { t.text } else { t.text_faint })).frame(false));
             if fx.clicked() {
                 let _ = app.session.execute("effects.toggleEnabled", json!({"clip": clip.0, "index": idx}));
             }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(tlf!("Master · {name}", name = it.name)).color(t.text_dim)).truncate());
+            });
         });
     });
     let set = |actions: &mut Actions, param: &str, v: Value| actions.push(json!({"clip": clip.0, "effect": idx, "param": param, "value": v}));
