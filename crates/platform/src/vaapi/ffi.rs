@@ -71,6 +71,10 @@ pub const VAProfileH264ConstrainedBaseline: VAProfile = 13;
 pub const VAProfileHEVCMain: VAProfile = 17;
 pub const VAProfileHEVCMain10: VAProfile = 18;
 pub const VAEntrypointVLD: VAEntrypoint = 1;
+/// H.264 / HEVC slice encode (AMD VCN, Intel QSV, and other Mesa encode paths).
+pub const VAEntrypointEncSlice: VAEntrypoint = 6;
+/// Low-power slice encode, when the driver exposes it separately from [`VAEntrypointEncSlice`].
+pub const VAEntrypointEncSliceLP: VAEntrypoint = 8;
 
 pub const VAConfigAttribRTFormat: VAConfigAttribType = 0;
 pub const VA_RT_FORMAT_YUV420: c_uint = 0x0000_0001;
@@ -447,6 +451,8 @@ pub type vaErrorStr = unsafe extern "C" fn(status: VAStatus) -> *const c_char;
 pub type vaQueryVendorString = unsafe extern "C" fn(dpy: VADisplay) -> *const c_char;
 pub type vaSetInfoCallback = unsafe extern "C" fn(dpy: VADisplay, callback: VAMessageCallback, user_context: *mut c_void) -> VAMessageCallback;
 pub type vaSetErrorCallback = unsafe extern "C" fn(dpy: VADisplay, callback: VAMessageCallback, user_context: *mut c_void) -> VAMessageCallback;
+pub type vaQueryConfigEntrypoints =
+    unsafe extern "C" fn(dpy: VADisplay, profile: VAProfile, entrypoint_list: *mut VAEntrypoint, num_entrypoints: *mut c_int) -> VAStatus;
 pub type vaGetConfigAttributes =
     unsafe extern "C" fn(dpy: VADisplay, profile: VAProfile, entrypoint: VAEntrypoint, attrib_list: *mut VAConfigAttrib, num_attribs: c_int) -> VAStatus;
 pub type vaCreateConfig = unsafe extern "C" fn(

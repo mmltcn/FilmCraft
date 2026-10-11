@@ -10,6 +10,7 @@
 //!
 //! The FFI is in [`ffi`] (declarations) and `va` (calls); the rest of this module is safe code.
 
+pub mod encode;
 pub mod ffi;
 pub mod h264;
 pub mod hevc;

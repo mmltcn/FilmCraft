@@ -8,6 +8,7 @@
 //! Linux with neither) registration does nothing and reports [`Availability::Unavailable`]. It also registers a
 //! hardware H.264 encoder factory (`filmcraft_export::register_encoder`) that only acts when an
 //! export asks for it (`ExportSettings::hardware_encoding` = `Auto`), see [`hardware_encode`]; on
+//! Linux that is NVENC ([`nvenc`]) after a VA-API EncSlice probe ([`vaapi::encode`]); on
 //! macOS and on Windows (NVENC, [`nvenc`]) it also makes the H.265 export format available, and on Windows
 //! (Main 10) lets HDR sequences export as HDR H.265.
 //!
@@ -69,7 +70,11 @@ pub enum Availability {
 /// using FilmCraft's own decoders.
 pub fn register() -> Availability {
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-    filmcraft_export::register_encoder(nvenc::export::factory);
+    {
+        filmcraft_export::register_encoder(nvenc::export::factory);
+        // Tried first: AMD / Intel EncSlice before NVENC, which otherwise logs a missing NVIDIA library.
+        filmcraft_export::register_encoder(vaapi::encode::factory);
+    }
     #[cfg(target_os = "macos")]
     {
         filmcraft_codecs::register_video_decoder(videotoolbox_factory);

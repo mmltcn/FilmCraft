@@ -131,6 +131,14 @@ let availability = filmcraft_platform::register(); // Available("VideoToolbox") 
   log is bounded (600 samples / 256 MB); beyond it one error is returned and the next seek restarts
   in software. Streams our decoders cannot decode (HEVC 4:2:2) have no fallback: the error stands.
 
+## Hardware H.264 encoding (Linux)
+
+`register()` puts NVENC (NVIDIA) and a VA-API EncSlice probe (`vaapi::encode`) in front of the
+built-in encoder. AMD VCN and Intel QSV expose `VAEntrypointEncSlice`; the probe logs that and
+falls through (a slice encoder is not wired yet) so the software encoder runs instead of hanging
+on a missing `libnvidia-encode`. Export GPU readback waits at most eight seconds (`filmcraft-gpu`)
+so a wedged radv device fails the GPU path instead of blocking forever.
+
 ## Hardware H.264 encoding (macOS)
 
 `videotoolbox_encode.rs` (FFI) wraps a VideoToolbox compression session with a hardware encoder

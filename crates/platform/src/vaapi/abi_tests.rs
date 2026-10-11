@@ -259,6 +259,8 @@ fn constants_match_the_header() {
     assert_eq!(VAProfileH264High as i64, 7, "VAProfileH264High");
     assert_eq!(VAProfileH264ConstrainedBaseline as i64, 13, "VAProfileH264ConstrainedBaseline");
     assert_eq!(VAEntrypointVLD as i64, 1, "VAEntrypointVLD");
+    assert_eq!(VAEntrypointEncSlice as i64, 6, "VAEntrypointEncSlice");
+    assert_eq!(VAEntrypointEncSliceLP as i64, 8, "VAEntrypointEncSliceLP");
     assert_eq!(VAConfigAttribRTFormat as i64, 0, "VAConfigAttribRTFormat");
     assert_eq!(VA_RT_FORMAT_YUV420 as i64, 1, "VA_RT_FORMAT_YUV420");
     assert_eq!(VA_PROGRESSIVE as i64, 1, "VA_PROGRESSIVE");

@@ -30,6 +30,7 @@ struct Api {
     vendor_string: ffi::vaQueryVendorString,
     set_info_callback: ffi::vaSetInfoCallback,
     set_error_callback: ffi::vaSetErrorCallback,
+    query_config_entrypoints: ffi::vaQueryConfigEntrypoints,
     get_config_attributes: ffi::vaGetConfigAttributes,
     create_config: ffi::vaCreateConfig,
     destroy_config: ffi::vaDestroyConfig,
@@ -80,6 +81,7 @@ fn load() -> Result<Api, String> {
         vendor_string: sym!(va, vaQueryVendorString),
         set_info_callback: sym!(va, vaSetInfoCallback),
         set_error_callback: sym!(va, vaSetErrorCallback),
+        query_config_entrypoints: sym!(va, vaQueryConfigEntrypoints),
         get_config_attributes: sym!(va, vaGetConfigAttributes),
         create_config: sym!(va, vaCreateConfig),
         destroy_config: sym!(va, vaDestroyConfig),
@@ -582,4 +584,30 @@ pub fn probe() -> &'static Result<String, String> {
     static PROBE: OnceLock<Result<String, String>> = OnceLock::new();
     // the display opened to answer is the one sessions share
     PROBE.get_or_init(|| shared().map(|d| d.vendor().to_string()))
+}
+
+/// Whether any H.264 profile on this display exposes slice encode (`EncSlice` or `EncSliceLP`):
+/// AMD VCN and Intel QSV do; NVIDIA's proprietary stack does not. The encoder factory uses this to
+/// decline quickly instead of opening NVENC on a machine that has no NVIDIA encode library.
+pub fn h264_encode_probe() -> Result<String, String> {
+    let display = shared()?;
+    let api = display.api;
+    let dpy = display.dpy;
+    const PROFILES: [ffi::VAProfile; 3] = [ffi::VAProfileH264ConstrainedBaseline, ffi::VAProfileH264Main, ffi::VAProfileH264High];
+    let mut why = "no H.264 EncSlice / EncSliceLP entrypoint".to_string();
+    for profile in PROFILES {
+        let mut list = [0 as ffi::VAEntrypoint; 32];
+        let mut n: c_int = c_int::try_from(list.len()).unwrap_or(32);
+        // SAFETY: `dpy` is an initialised display; `list` has room for `n` entrypoints and `n` is a live output.
+        let st = unsafe { (api.query_config_entrypoints)(dpy, profile, list.as_mut_ptr(), &mut n) };
+        if let Err(e) = display.check(st, "vaQueryConfigEntrypoints") {
+            why = e;
+            continue;
+        }
+        let n = usize::try_from(n.max(0)).unwrap_or(0).min(list.len());
+        if list[..n].iter().any(|&e| e == ffi::VAEntrypointEncSlice || e == ffi::VAEntrypointEncSliceLP) {
+            return Ok(display.vendor().to_string());
+        }
+    }
+    Err(why)
 }
