@@ -9,6 +9,7 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+pub mod animated;
 pub mod cache;
 pub mod cancel;
 pub mod digits;
@@ -185,7 +186,8 @@ pub fn is_importable(path: &Path) -> bool {
 /// A pluggable opener (containers/codecs register themselves here from higher-level crates).
 pub type Opener = fn(name: &str, bytes: Arc<[u8]>) -> Option<Result<SharedSource>>;
 
-/// Open media from bytes, trying `extra` openers first, then the built-in ones (stills, WAV).
+/// Open media from bytes, trying `extra` openers first, then the built-in ones (WAV, animated
+/// images, stills).
 pub fn open_bytes(name: &str, bytes: Arc<[u8]>, extra: &[Opener]) -> Result<SharedSource> {
     for o in extra {
         if let Some(r) = o(name, bytes.clone()) {
@@ -194,6 +196,10 @@ pub fn open_bytes(name: &str, bytes: Arc<[u8]>, extra: &[Opener]) -> Result<Shar
     }
     if wav::sniff(&bytes) {
         return Ok(Arc::new(wav::WavSource::parse(name, bytes)?));
+    }
+    // APNG and animated GIF play as movies (#402); single-frame files fall through to the stills
+    if let Some(r) = animated::open(name, &bytes) {
+        return Ok(Arc::new(r?));
     }
     if still::sniff(name, &bytes) {
         return Ok(Arc::new(still::StillSource::decode(name, &bytes)?));

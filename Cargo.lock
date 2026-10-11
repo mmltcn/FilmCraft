@@ -2079,6 +2079,7 @@ dependencies = [
  "filmcraft-frame",
  "filmcraft-time",
  "image",
+ "png",
  "rayon",
  "serde",
  "thiserror 2.0.21",
