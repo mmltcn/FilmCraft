@@ -38,6 +38,12 @@ fn interface_language_persists_and_rejects_hostile_values() {
     assert_eq!(Preferences::load(&path).general.interface_language, "de");
     set(&mut s, "general.interfaceLanguage", json!("fr"));
     assert_eq!(Preferences::load(&path).general.interface_language, "fr");
+    // Indonesian is stored as `id`, not a locale tag or the legacy `in` code
+    for value in [json!("id-ID"), json!("in"), json!("ID")] {
+        assert!(s.execute("prefs.set", json!({"key": "general.interfaceLanguage", "value": value})).is_err());
+    }
+    set(&mut s, "general.interfaceLanguage", json!("id"));
+    assert_eq!(Preferences::load(&path).general.interface_language, "id");
     // back to following the operating system (#218)
     set(&mut s, "general.interfaceLanguage", json!("system"));
     assert_eq!(Preferences::load(&path).general.interface_language, "system");

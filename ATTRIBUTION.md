@@ -9,6 +9,7 @@ iconography, images or other Adobe assets; open licences only; every asset attri
 
 | Asset | Author | Source | Licence |
 |---|---|---|---|
+| `crates/ui-egui/src/i18n/id.tsv` | FilmCraft contributors | Original work: clean-room Indonesian interface translations | MIT OR Apache-2.0 |
 | `crates/ui-egui/src/i18n/fr.tsv` | FilmCraft contributors | Original work: clean-room French interface translations | MIT OR Apache-2.0 |
 | `crates/ui-egui/src/i18n/ru.tsv` | FilmCraft contributors | Original work: clean-room Russian interface translations | MIT OR Apache-2.0 |
 | `crates/ui-egui/src/i18n/uk.tsv` | FilmCraft contributors | Original work: clean-room Ukrainian interface translations | MIT OR Apache-2.0 |

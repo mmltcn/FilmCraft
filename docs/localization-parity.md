@@ -10,7 +10,7 @@ Portuguese (Brazil), Russian, Simplified Chinese.
 
 Edit ▸ Language (also Settings ▸ General, `general.interfaceLanguage`) switches the interface and
 persists across restarts; System Language (the default) follows the OS's or browser's preferred
-languages and falls back to English. Commands `app.language.<english|japanese|spanish|portuguese|ukrainian|chinese|german|russian|french>`
+languages and falls back to English. Commands `app.language.<english|japanese|spanish|portuguese|ukrainian|chinese|german|russian|french|indonesian>`
 are reachable over the control channel. One catalog per language,
 `crates/ui-egui/src/i18n/<code>.tsv` (format in the header of `es.tsv`); UI code wraps strings in
 `tl!("…")` / `tlf!("…{name}", name)`, and registry names (effects and their parameters, settings,
@@ -44,7 +44,7 @@ whole interface, one PR) at ~4–8 h per language for the catalog plus tests.
 | Arabic | ar | 0 (0%) | — | **no RTL layout, no shaping in the interface**; titles broken (#395) | — | none | 40–70 h |
 | French | fr | 3,526 (same entries as Spanish, plus the macOS Settings item) | as Spanish | Latin (bundled fonts) | not recorded; welcome | partial (#498) | review |
 | Portuguese (Brazil) | pt-br | 348 (9.9%) | menus only | Latin | not recorded | menus only | 5–9 h + review |
-| Indonesian | id | 0 (0%) | — | Latin | — | none | 6–10 h + review |
+| Indonesian | id | 3,541 (same entries as Spanish, plus the macOS Settings item); must cover the core menus, no entry without a Spanish one | as Spanish | Latin (bundled fonts); System Language also maps the legacy `in` code | not recorded; welcome | partial (#867) | review |
 | Japanese | ja | 3,487 (99.7%) | as zh-cn; system-font kanji may pick the Chinese fallback (#547) | CJK fonts, vertical title text | not recorded | partial | 4–8 h + review |
 | German | de | 0 (0%) | — | Latin | — | none (requested #490) | 6–10 h + review |
 | Korean | ko | 0 (0%) | — | needs Hangul fonts in craft-fonts and IME testing | — | none (requested #508) | 10–20 h + review |

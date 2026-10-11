@@ -45,6 +45,7 @@ pub enum Language {
     De,
     Ru,
     Fr,
+    Id,
 }
 
 static JAPANESE: OnceLock<Catalog> = OnceLock::new();
@@ -55,9 +56,10 @@ static CHINESE: OnceLock<Catalog> = OnceLock::new();
 static GERMAN: OnceLock<Catalog> = OnceLock::new();
 static RUSSIAN: OnceLock<Catalog> = OnceLock::new();
 static FRENCH: OnceLock<Catalog> = OnceLock::new();
+static INDONESIAN: OnceLock<Catalog> = OnceLock::new();
 
 impl Language {
-    pub const ALL: [Self; 9] = [Self::En, Self::Ja, Self::Es, Self::PtBr, Self::Uk, Self::ZhCn, Self::De, Self::Ru, Self::Fr];
+    pub const ALL: [Self; 10] = [Self::En, Self::Ja, Self::Es, Self::PtBr, Self::Uk, Self::ZhCn, Self::De, Self::Ru, Self::Fr, Self::Id];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -70,6 +72,7 @@ impl Language {
             Self::De => "Deutsch",
             Self::Ru => "Русский",
             Self::Fr => "Français",
+            Self::Id => "Bahasa Indonesia",
         }
     }
 
@@ -84,6 +87,7 @@ impl Language {
             "de" => Some(Self::De),
             "ru" => Some(Self::Ru),
             "fr" => Some(Self::Fr),
+            "id" => Some(Self::Id),
             _ => None,
         }
     }
@@ -92,11 +96,12 @@ impl Language {
     /// (BCP 47 or POSIX locale tags such as `es-419`, `pt_BR.UTF-8`, most preferred first) that the
     /// interface has, else English. Any Portuguese gets the Brazilian catalog, the only one there is;
     /// any German (`de-AT`, `de_CH.UTF-8`…) gets the German one and any French (`fr-CA`, `fr_BE.UTF-8`…)
-    /// the French one. Chinese gets the Simplified catalog
+    /// the French one; any Indonesian (`id-ID`, `id_ID.UTF-8`, and the legacy `in-ID` that older Java
+    /// and Android runtimes report) the Indonesian one. Chinese gets the Simplified catalog
     /// only for Simplified locales (`zh`, `zh-CN`, `zh-SG`, `zh-Hans…`); Traditional ones (`zh-TW`,
     /// `zh-HK`, `zh-MO`, `zh-Hant…`) are skipped.
     pub fn from_locales(tags: &[String]) -> Self {
-        const PRIMARY: [(&str, Language); 8] = [
+        const PRIMARY: [(&str, Language); 10] = [
             ("en", Language::En),
             ("ja", Language::Ja),
             ("es", Language::Es),
@@ -105,6 +110,8 @@ impl Language {
             ("de", Language::De),
             ("ru", Language::Ru),
             ("fr", Language::Fr),
+            ("id", Language::Id),
+            ("in", Language::Id),
         ];
         tags.iter()
             .find_map(|tag| {
@@ -134,6 +141,7 @@ impl Language {
             Self::De => "de",
             Self::Ru => "ru",
             Self::Fr => "fr",
+            Self::Id => "id",
         }
     }
 
@@ -149,6 +157,7 @@ impl Language {
             Self::De => Some(GERMAN.get_or_init(|| Catalog::parse(include_str!("de.tsv")))),
             Self::Ru => Some(RUSSIAN.get_or_init(|| Catalog::parse(include_str!("ru.tsv")))),
             Self::Fr => Some(FRENCH.get_or_init(|| Catalog::parse(include_str!("fr.tsv")))),
+            Self::Id => Some(INDONESIAN.get_or_init(|| Catalog::parse(include_str!("id.tsv")))),
         }
     }
 
@@ -319,6 +328,7 @@ mod tests {
             ("de", include_str!("de.tsv")),
             ("ru", include_str!("ru.tsv")),
             ("fr", include_str!("fr.tsv")),
+            ("id", include_str!("id.tsv")),
         ] {
             let (entries, errors) = catalog::parse_entries(text);
             assert!(errors.is_empty(), "{code}: {errors:?}");
@@ -366,6 +376,13 @@ mod tests {
         assert_eq!(Language::Fr.tr("An untranslated label"), "An untranslated label");
         assert_eq!(Language::parse("fr"), Some(Language::Fr));
         assert_eq!(Language::parse("fr-FR"), None, "the preference stores the bare code");
+        assert_eq!(Language::Id.name(), "Bahasa Indonesia");
+        assert_eq!(Language::Id.tr("File"), "Berkas");
+        assert_eq!(Language::Id.tr("Save As…"), "Simpan Sebagai…");
+        assert_eq!(Language::Id.tr("Liburan keluarga.mp4"), "Liburan keluarga.mp4");
+        assert_eq!(Language::Id.tr("An untranslated label"), "An untranslated label");
+        assert_eq!(Language::parse("id"), Some(Language::Id));
+        assert_eq!(Language::parse("id-ID"), None, "the preference stores the bare code");
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
             let json = serde_json::to_string(&l).unwrap();
@@ -834,6 +851,24 @@ mod tests {
         let mut restarted = filmcraft_engine::Session::default();
         restarted.prefs = serde_json::from_str(&prefs).unwrap();
         assert_eq!(crate::FilmcraftApp::new(restarted).ui.language, Language::Fr);
+        let result = crate::menus::invoke(&mut app, &ctx, "app.language.indonesian", serde_json::json!({})).unwrap();
+        assert_eq!(result, serde_json::json!("id"));
+        assert_eq!((app.ui.language, current()), (Language::Id, Language::Id));
+        assert_eq!(app.session.prefs.general.interface_language, "id");
+        for it in crate::menus::menu_items(&app).iter().filter(|it| it.id.starts_with("app.language.")) {
+            assert_eq!(it.checked, Some(it.id == "app.language.indonesian"), "{}", it.id);
+        }
+        let items = crate::menus::menu_items(&app);
+        let label = |id: &str| items.iter().find(|it| it.id == id).map(|it| it.label.as_str());
+        assert_eq!(label("file.saveAs"), Some("Simpan Sebagai…"));
+        assert_eq!(label("app.language.french"), Some("Français"));
+        assert_eq!(label("app.language.indonesian"), Some("Bahasa Indonesia"));
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains("\"language\":\"id\""), "{saved}");
+        let prefs = serde_json::to_string(&app.session.prefs).unwrap();
+        let mut restarted = filmcraft_engine::Session::default();
+        restarted.prefs = serde_json::from_str(&prefs).unwrap();
+        assert_eq!(crate::FilmcraftApp::new(restarted).ui.language, Language::Id);
         crate::menus::invoke(&mut app, &ctx, "app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::En);
         set_current(Language::En);
@@ -864,6 +899,13 @@ mod tests {
         }
         for tag in ["fr", "FR", "fr-FR", "fr-CA", "fr-BE", "fr-CH", "fr_FR.UTF-8", "fr_BE.UTF-8@euro", "fr_CA"] {
             assert_eq!(l(&[tag]), Language::Fr, "{tag}");
+        }
+        for tag in ["id", "ID", "id-ID", "id_ID.UTF-8", "id_ID", "in", "in-ID", "in_ID.UTF-8"] {
+            assert_eq!(l(&[tag]), Language::Id, "{tag}");
+        }
+        assert_eq!(l(&["jv-ID", "ms-MY", "id-ID", "en"]), Language::Id, "Javanese and Malay have no catalog");
+        for none in [&["ind"][..], &["i"], &["-id"], &["ms"], &["ms-ID"], &["jv"]] {
+            assert_eq!(l(none), Language::En, "{none:?}");
         }
         assert_eq!(l(&["it-IT", "nl", "es-MX", "ja"]), Language::Es, "the first one the interface has");
         assert_eq!(l(&["it-CH", "de-CH", "fr-CH", "en"]), Language::De);
@@ -1000,6 +1042,41 @@ mod tests {
         }
     }
 
+    /// Indonesian covers the whole interface (the Spanish catalog's entries and the native macOS
+    /// Settings menu), but, like Japanese and French, the tests require only the core menus (the
+    /// menus-only Ukrainian catalog, the top-level menus and the native macOS Settings menu), so
+    /// strings added later show in English until they are translated. Every entry must still have a
+    /// Spanish counterpart: a renamed or removed source would otherwise leave a dead entry.
+    #[test]
+    fn indonesian_covers_the_menus_and_has_no_dead_entries() {
+        let (entries, errors) = catalog::parse_entries(include_str!("id.tsv"));
+        assert!(errors.is_empty(), "{errors:?}");
+        for (ctx, en, _) in &entries {
+            assert!(ctx.is_empty() && (Language::Es.has(en) || en == "Settings"), "Indonesian entry without a Spanish one: {ctx:?} {en:?}");
+        }
+        let (core, _) = catalog::parse_entries(include_str!("uk.tsv"));
+        for (_, en, _) in core {
+            assert!(Language::Id.has(&en), "missing Indonesian menu label: {en}");
+        }
+        for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
+            assert!(Language::Id.has(en), "untranslated Indonesian menu: {en}");
+        }
+        // beyond the menus: panels, effects and their parameters, settings, status messages
+        for (en, id) in [
+            ("Settings", "Preferensi"),
+            ("Gaussian Blur", "Buram Gaussian"),
+            ("Audio Track Mixer", "Mixer Trek Audio"),
+            ("Sequence", "Sekuens"),
+            ("Playhead", "Kepala Putar"),
+        ] {
+            assert_eq!(Language::Id.tr(en), id);
+        }
+        set_current(Language::Id);
+        assert!(matches_query("Gaussian Blur", "buram"));
+        assert!(matches_query("Gaussian Blur", "gaussian"));
+        set_current(Language::En);
+    }
+
     /// Every non-ASCII character of `text` renders with the bundled interface fonts, in every family.
     fn assert_bundled_fonts_cover(text: impl Iterator<Item = char>) {
         let ctx = egui::Context::default();
@@ -1041,6 +1118,16 @@ mod tests {
         let alphabet = "ÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸàâæçéèêëîïôœùûüÿ«»’";
         let letters = entries.iter().flat_map(|(_, _, fr)| fr.chars()).filter(|ch| ch.is_alphabetic());
         assert_bundled_fonts_cover(alphabet.chars().chain(Language::Fr.name().chars()).chain(letters));
+    }
+
+    #[test]
+    fn indonesian_renders_with_bundled_fonts() {
+        let (entries, _) = catalog::parse_entries(include_str!("id.tsv"));
+        // Indonesian is written in basic Latin letters; any other letter an entry uses, and its
+        // curly quotes, dashes and ellipses, must still render (symbols such as ✔ come from the
+        // English sources)
+        let letters = entries.iter().flat_map(|(_, _, id)| id.chars()).filter(|ch| ch.is_alphabetic() || "“”‘’–—…".contains(*ch));
+        assert_bundled_fonts_cover(Language::Id.name().chars().chain(letters));
     }
 
     #[test]

@@ -204,9 +204,12 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 - **Have:** Spanish, Japanese, Simplified Chinese and French (#498) catalogs cover ~99.6–100% of
   the ~3,500 cataloged strings; Portuguese (Brazil) and Ukrainian ~10% (menus).
 - **Missing:** Hindi, Arabic (no RTL interface layout; Arabic titles reported broken, #395),
-  Indonesian, German beyond menus (#490), Korean (#508; needs Hangul fonts in craft-fonts),
+  German beyond menus (#490), Korean (#508; needs Hangul fonts in craft-fonts),
   Vietnamese, Portuguese beyond menus; Premiere also ships Italian and Russian. Engine errors,
   CLI and MCP stay English. No language has a recorded native-speaker review.
+- **Done:** Indonesian (#867): `id.tsv` has every entry of the Spanish catalog (~100%), in Edit ▸
+  Language, Settings ▸ General and the native macOS menu; System Language picks it for `id-*` (and
+  legacy `in-*`) locales. Native-speaker review welcome.
 - **Estimate:** 150–230 h. Doc: [localization-parity.md](localization-parity.md).
 
 ## G15. Interchange never validated in Avid / Pro Tools; slow XML import
