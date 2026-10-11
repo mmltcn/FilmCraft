@@ -518,6 +518,36 @@ decode, and the UI-thread present (upload and draw, including the backdrop copie
 blended layers) stays at 9–10 ms p50, as for `stack3`. Before, every frame was composited on the
 CPU (≈ 2 cores more at 23.976 fps) and Full resolution could not keep up at this load.
 
+## Results (VP9 loop filter wavefront, #980, before → after)
+
+The VP9 post stage of a frame (band assembly, loop filter, publication) ran on one thread, and
+later frames wait per band for their references, so the loop filter (about 30 % of the decode
+profile) set the pace of every inter frame: with 16 threads the tile columns spent most of their
+time waiting for the previous frame's bands. The loop filter now runs as a wavefront over
+superblock rows (row r two superblocks behind row r - 1, which is what the raster order of 8.8.1
+allows), the post thread and helpers on the decoder's pool each taking a row. No lock is held
+while a superblock is filtered: rows exchange copies of the 8 rows the filter reaches across a
+band boundary. Output is bit-identical (the conformance tests compare 1, 2, 3, 5 and 16 threads
+with ffmpeg).
+
+AMD Ryzen 7 7800X3D (8 cores / 16 threads), shared with other agents' builds, 2026-10-11.
+`vp9dec` example, 16 threads, runs alternating base / after; paired speed-up = base wall time /
+after wall time per pair:
+
+| fixture | load | paired speed-up, median (range) | after faster | CPU ms/frame |
+|---|---|---|---|---|
+| `bench_1080p` (4 tile columns) | 15–18 | 1.39 (1.20–2.09) | 6/6 | 13.5 → 15.3 |
+| `bench_4k` (8 tile columns) | 15–18 | 1.52 (1.49–1.59) | 6/6 | 48.0 → 57.8 |
+| 1080p30 realtime, noisy (6 Mb/s) | 15–18 | 1.56 (1.27–1.72) | 6/6 | 15.3 → 20.8 |
+| `bench_1080p` | 25–33 | 1.17 (0.91–1.65) | 4/6 | 15.7 → 17.9 |
+| `bench_4k` | 25–33 | 1.29 (0.99–2.03) | 5/6 | 56.9 → 63.1 |
+| 1080p30 realtime, noisy | 25–33 | 1.53 (1.40–1.94) | 6/6 | 22.5 → 25.4 |
+
+With one thread the rows run one after the other: 31.12 → 31.28 G user instructions for the noisy
+1080p clip (+0.5 %, `perf stat`). The extra CPU with threads is mostly rayon workers spinning
+before they sleep. With the machine oversubscribed (load above 16) the wavefront gains less, as
+every row waits for the one above.
+
 ## Results (M4.10: 4K VP9, AV1 and HEVC, before → after)
 
 Baseline = commit `a814ff6` (decoders unchanged since M4.8); after = M4.10. Interleaved runs on

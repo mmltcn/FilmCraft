@@ -222,7 +222,9 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
   software decode is ~4 fps at 1080p single-threaded; 8K is not real time.
 - **Done:** Render (Effects) In to Out renders only the frames between In and Out, as partial
   previews named by segment hash and relative frames, instead of every segment In/Out touches
-  (#424); Render Audio still renders whole audio segments.
+  (#424); Render Audio still renders whole audio segments. VP9 software decode loop-filters a
+  frame as a wavefront over superblock rows on the decoder's pool instead of on one thread,
+  bit-identical, 1.2–1.5× faster with 16 threads (#980).
 - **Estimate:** 30–60 h. Doc: [performance.md](performance.md).
 
 ## G17. Audio device and playback reliability
