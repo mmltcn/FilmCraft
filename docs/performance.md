@@ -518,6 +518,49 @@ decode, and the UI-thread present (upload and draw, including the backdrop copie
 blended layers) stays at 9–10 ms p50, as for `stack3`. Before, every frame was composited on the
 CPU (≈ 2 cores more at 23.976 fps) and Full resolution could not keep up at this load.
 
+## Results (#847: AV1 in-loop filters in parallel row bands, before → after)
+
+The AV1 decoder ran deblocking, CDEF and loop restoration on one thread per frame. A single-tile
+stream (what SVT-AV1 and most encoders write by default) has no other parallelism inside a
+frame, and a frame's references are waited for as whole frames, so this serial tail sat on the
+critical path of every frame that references it. The three filters now run in bands of 64 luma
+rows on the decoder's rayon pool, one join per filter per frame (the loop filter recomputes the
+8 rows above each band rather than splitting into two passes, because every join costs a worker
+wake-up, which is slow on a busy machine). Output is bit-exact with the single-threaded path and
+with libdav1d (all oracle and conformance tests, plus new 4:2:2 / 4:4:4 libaom fixtures); with
+one thread the code path is the old one.
+
+Linux, AMD Ryzen 7 7800X3D (8 cores / 16 threads), 2026-10-11, shared with other agents' builds;
+base = `2ff3f5e`, after = this change, 16 decoder threads, SVT-AV1 preset 8 fixtures from
+`crates/av1/tests/perf.rs` (`perf_1080p_lowdelay` and `perf_2160p_gop` are new there).
+
+`av1dec` example (`AV1_LOOPS=2 AV1_THREADS=16`), 8 rounds alternating base / after per fixture,
+load average 11–27; speed-up = base wall time / after wall time of the adjacent pair:
+
+| fixture | fps base → after (median) | paired speed-up, median (range) | after faster | CPU ms / frame (all threads) |
+|---|---|---|---|---|
+| `perf_1080p_lowdelay` (each frame refs the last) | 31.0 → **39.9** | 1.28 (0.85–1.48) | 6 / 8 | 44.2 → 55.0 |
+| `perf_1080p_gop` (crf 30) | 74.8 → **97.7** | 1.30 (1.06–1.41) | 8 / 8 | 30.2 → 35.9 |
+| `perf_1080p_gop_hq` (crf 18) | 32.0 → **37.5** | 1.16 (1.04–1.29) | 8 / 8 | 66.9 → 77.1 |
+| `perf_2160p_gop` (one tile) | 23.0 → **25.3** | 1.14 (1.08–1.41) | 8 / 8 | 103.1 → 115.5 |
+| `perf_1080p_intra` (10 key frames) | 121.3 → 138.1 | 1.03 (0.92–1.21) | 4 / 8 | 40.8 → 45.5 |
+
+Per-stage wall time on the frame worker (`tests/perf.rs`, 16 threads, ms per frame, median of 2
+alternating rounds at load average 8–11):
+
+| fixture | 16 threads fps | deblock | CDEF | restoration |
+|---|---|---|---|---|
+| `perf_1080p_lowdelay` | 31.8 → **48.7** | 2.03 → 0.63 | 5.16 → 1.62 | 5.81 → 1.40 |
+| `perf_2160p_gop` | 24.0 → **31.9** | 2.78 → 0.81 | 7.38 → 3.74 | 7.84 → 2.70 |
+| `perf_1080p_gop_hq` | 34.8 → 33.6 | 1.10 → 0.55 | 6.53 → 3.08 | 4.94 → 1.65 |
+
+One thread is unchanged (`perf_1080p_lowdelay`, 8 pairs: 2.19–2.20 s both). The extra CPU time
+is mostly rayon workers spinning briefly before they sleep after each join, plus the loop
+filter's recomputed margin rows. Key-frame-only streams gain little: their frames are
+independent, so frame threads already keep every core busy. What remains is the tile decode
+itself (entropy decoding and reconstruction of a single tile, 65–80 % of a frame), which only
+row-level frame threading (waiting for reference rows instead of whole frames) can overlap.
+
 ## Results (M4.10: 4K VP9, AV1 and HEVC, before → after)
 
 Baseline = commit `a814ff6` (decoders unchanged since M4.8); after = M4.10. Interleaved runs on
