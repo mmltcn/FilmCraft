@@ -235,13 +235,14 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 
 - **Missing:** Warp Stabilizer is 2-D (Premiere's is 3-D subspace), Morph Cut has no face tracking
   (and occlusion edges are soft), Lumetri HDR-aware maths, multicam paging beyond 16 angles,
-  redesigned 26.0 mask tools (constrained lines; an on-monitor corner-roundness handle).
+  redesigned 26.0 mask tools (Shift-constrained vertex and whole-mask drags; an on-monitor
+  corner-roundness handle).
 - **Have:** Optical Flow time interpolation synthesises motion-compensated in-between frames (dense
   coarse-to-fine Lucas–Kanade, CPU; #780); Morph Cut morphs the subject along that optical flow
   instead of cross-dissolving (CPU; #805); Transform shutter angle motion blur (#415); Ultra Key
   Setting applied as a parameter preset (#458); rectangle and polygon masks round their corners
   with circular fillets (`masks.add` `cornerRadius`, `masks.roundCorners`, every path keyframe;
-  #813).
+  #813); Shift snaps pen mask segments and dragged-out Bézier handles to 45° steps (#853).
 - **Estimate:** 60–110 h.
 
 ## G19. Speech to text off in release builds

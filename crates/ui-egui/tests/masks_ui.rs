@@ -216,6 +216,50 @@ fn create_and_edit_masks_on_the_monitor() {
     d.shot("mask-tracked");
 }
 
+/// Shift held while placing pen points snaps each new segment to 45° steps from the previous
+/// point; a Shift-drag also constrains the Bézier handle it pulls out (#853).
+#[test]
+fn shift_constrains_pen_mask_segments_to_45_degrees() {
+    let mut d = Driver::demo();
+    d.ok("ui.set", json!({"workspace": "Effects"}));
+    let seq = d.exec("sequence.inspect", json!({}));
+    let clip = &seq["video"][0]["items"][0];
+    let (id, start, dur) = (clip["clip"].as_u64().unwrap(), clip["start"].as_i64().unwrap(), clip["duration"].as_i64().unwrap());
+    d.exec("playhead.set", json!({"time": start + dur / 2}));
+    d.exec("timeline.select", json!({"clips": [id]}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "effectControls.opacity.mask.pen"}));
+    d.frames(2);
+    let pic = d.rect("program.picture");
+    let at = |fx: f64, fy: f64| json!({"x": pic[0] + pic[2] * fx, "y": pic[1] + pic[3] * fy});
+    // hold Shift (as the OS reports a held key) across the clicks
+    d.harness.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    d.frames(1);
+    for (fx, fy) in [(0.3, 0.3), (0.6, 0.34), (0.63, 0.6)] {
+        d.ok("ui.click", at(fx, fy));
+        d.frames(2);
+    }
+    // a Shift-drag places the fourth point and pulls out its handle
+    d.ok("ui.drag", json!({"from": at(0.32, 0.62), "to": at(0.42, 0.64), "steps": 6, "modifiers": {"shift": true}}));
+    d.frames(2);
+    d.harness.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    d.frames(1);
+    d.ok("ui.click", at(0.3, 0.3));
+    d.frames(3);
+    let m = d.masks();
+    let pen = m.iter().find(|x| x["effectId"] == "opacity").unwrap_or_else(|| panic!("opacity mask: {m:?}"));
+    assert_eq!(pen["path"]["vertices"].as_array().unwrap().len(), 4, "{pen}");
+    let (p0, p1, p2, p3) = (v0(pen, 0), v0(pen, 1), v0(pen, 2), v0(pen, 3));
+    assert!((p1.1 - p0.1).abs() < 1e-6, "segment 0→1 horizontal: {p0:?} {p1:?}");
+    assert!(p1.0 > p0.0 + 50.0, "{p0:?} {p1:?}");
+    assert!((p2.0 - p1.0).abs() < 1e-6, "segment 1→2 vertical: {p1:?} {p2:?}");
+    assert!(p2.1 > p1.1 + 50.0, "{p1:?} {p2:?}");
+    assert!((p3.1 - p2.1).abs() < 1e-6, "segment 2→3 horizontal: {p2:?} {p3:?}");
+    let out = &pen["path"]["vertices"][3]["out"];
+    let (ox, oy) = (out[0].as_f64().unwrap(), out[1].as_f64().unwrap());
+    assert!(ox > 10.0 && oy.abs() < 1e-6, "handle constrained horizontal: {pen}");
+}
+
 #[test]
 fn presets_bin_drag_and_save_dialog() {
     let mut d = Driver::demo();

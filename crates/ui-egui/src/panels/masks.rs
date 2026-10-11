@@ -464,6 +464,12 @@ fn pen_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32
     let painter = ui.painter().with_clip_rect(pic);
     let to_c = |p: Pos2| to_clip.apply(Vec2::new(p.x as f64, p.y as f64));
     let mut d = draft.clone();
+    // Shift constrains the segment from the previous point (and a dragged-out handle) to 45° steps
+    let shift = ui.input(|i| i.modifiers.shift);
+    let snap = |from: Option<&[f64; 4]>, p: Pos2| match from {
+        Some(q) if shift => constrain_45(sp(&to_screen, Vec2::new(q[0], q[1])), p),
+        _ => p,
+    };
     let mut commit = false;
     let pressed = resp.drag_started() || (resp.clicked() && !ui.data(|m| m.get_temp::<bool>(egui::Id::new("mask-pen-placed")).unwrap_or(false)));
     if pressed && let Some(p) = resp.interact_pointer_pos() {
@@ -471,7 +477,7 @@ fn pen_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32
         if d.points.len() >= 3 && near_first {
             commit = true;
         } else {
-            let c = to_c(p);
+            let c = to_c(snap(d.points.last(), p));
             d.points.push([c.x, c.y, 0.0, 0.0]);
             ui.data_mut(|m| m.insert_temp(egui::Id::new("mask-pen-placed"), resp.drag_started()));
         }
@@ -483,7 +489,7 @@ fn pen_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32
         && !commit
         && let (Some(p), Some(last)) = (resp.interact_pointer_pos(), d.points.last_mut())
     {
-        let c = to_c(p);
+        let c = to_c(snap(Some(last), p));
         let tan = Vec2::new(c.x - last[0], c.y - last[1]);
         if tan.length() > 2.0 {
             last[2] = tan.x;
@@ -504,7 +510,7 @@ fn pen_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32
         painter.add(egui::Shape::line(pts, Stroke::new(1.5, col)));
     }
     if let (Some(h), Some(l)) = (resp.hover_pos(), d.points.last()) {
-        painter.line_segment([sp(&to_screen, Vec2::new(l[0], l[1])), h], Stroke::new(1.0, col.gamma_multiply(0.5)));
+        painter.line_segment([sp(&to_screen, Vec2::new(l[0], l[1])), snap(Some(l), h)], Stroke::new(1.0, col.gamma_multiply(0.5)));
     }
     for (i, q) in d.points.iter().enumerate() {
         let p = sp(&to_screen, Vec2::new(q[0], q[1]));
@@ -547,6 +553,19 @@ fn open_polyline(path: &MaskPath, to_screen: &Affine) -> Vec<Pos2> {
         }
     }
     out
+}
+
+/// `to` moved onto the nearest 45° ray from `from` (horizontal, vertical or diagonal on screen),
+/// keeping its distance along that ray; `to` itself when it coincides with `from` or is not finite.
+fn constrain_45(from: Pos2, to: Pos2) -> Pos2 {
+    let v = to - from;
+    if !(v.x.is_finite() && v.y.is_finite()) || v.length_sq() == 0.0 {
+        return to;
+    }
+    let step = std::f32::consts::FRAC_PI_4;
+    let a = (v.y.atan2(v.x) / step).round() * step;
+    let dir = egui::Vec2::new(a.cos(), a.sin());
+    from + dir * v.dot(dir)
 }
 
 /// The Mask Path row's value area: mask tracking (backward continuously / one frame, forward one
@@ -605,5 +624,26 @@ pub fn path_value(app: &mut FilmcraftApp, ui: &mut egui::Ui, clip: ClipId, effec
         let n = j.progress.total.load(std::sync::atomic::Ordering::Relaxed);
         ui.label(egui::RichText::new(format!("{d}/{n}")).size(10.5).color(t.text_dim));
         ui.ctx().request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constrain_45_snaps_to_the_nearest_eighth_turn() {
+        let o = pos2(10.0, 20.0);
+        let near = |a: Pos2, b: Pos2| (a - b).length() < 1e-3;
+        // nearly horizontal / vertical: the off-axis component goes
+        assert!(near(constrain_45(o, pos2(110.0, 30.0)), pos2(110.0, 20.0)));
+        assert!(near(constrain_45(o, pos2(5.0, -80.0)), pos2(10.0, -80.0)));
+        // nearly diagonal: projected onto the 45° ray
+        let d = constrain_45(o, pos2(60.0, 66.0));
+        assert!(((d.x - o.x) - (d.y - o.y)).abs() < 1e-3, "{d:?}");
+        // degenerate input comes back unchanged
+        assert_eq!(constrain_45(o, o), o);
+        let nan = pos2(f32::NAN, 1.0);
+        assert!(constrain_45(o, nan).x.is_nan());
     }
 }
