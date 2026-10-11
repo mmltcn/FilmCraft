@@ -425,19 +425,62 @@ mod tests {
         assert!(missing.is_empty(), "untranslated menu labels: {missing:#?}");
     }
 
-    /// The Brazilian Portuguese catalog covers the menus; every entry must still be a menu label
-    /// (a renamed command would otherwise leave a dead entry and an untranslated menu item).
+    /// The core menus every other catalog must cover: the entries of the menus-only Ukrainian
+    /// catalog, which `ukrainian_entries_cover_the_original_menu_catalog` keeps to menu labels (and
+    /// the native macOS Settings menu). Brazilian Portuguese played this role while it was
+    /// menus-only.
+    fn core_menu_labels() -> Vec<String> {
+        let (entries, _) = catalog::parse_entries(include_str!("uk.tsv"));
+        entries.into_iter().map(|(_, en, _)| en).collect()
+    }
+
+    /// Brazilian Portuguese covers the whole interface (the Spanish catalog's entries and the native
+    /// macOS Settings menu), but, like Japanese and French, the tests require only the menus, so
+    /// strings added later show in English until they are translated. Every entry must still have a
+    /// Spanish counterpart: a renamed or removed source would otherwise leave a dead entry.
     #[test]
-    fn portuguese_entries_are_menu_labels() {
-        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
-        let items = crate::menus::menu_items(&app);
-        let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
-        let (entries, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
-        assert!(!entries.is_empty());
-        for (_, en, _) in entries {
-            assert!(known(&en), "not a menu label: {en}");
+    fn portuguese_covers_the_menus_and_has_no_dead_entries() {
+        let (entries, errors) = catalog::parse_entries(include_str!("pt-br.tsv"));
+        assert!(errors.is_empty(), "{errors:?}");
+        for (ctx, en, _) in &entries {
+            assert!(ctx.is_empty() && (Language::Es.has(en) || en == "Settings"), "Portuguese entry without a Spanish one: {ctx:?} {en:?}");
         }
-        assert_eq!(Language::PtBr.tr("File"), "Arquivo");
+        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
+        let mut missing: Vec<String> = Vec::new();
+        let mut need = |text: &str| {
+            if translatable(text) && Language::Es.has(text) && !Language::PtBr.has(text) && !missing.iter().any(|m| m == text) {
+                missing.push(text.to_string());
+            }
+        };
+        for top in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
+            need(top);
+        }
+        for it in crate::menus::menu_items(&app) {
+            need(&it.label);
+            for p in &it.path {
+                need(p);
+            }
+        }
+        for en in core_menu_labels() {
+            need(&en);
+        }
+        missing.sort();
+        assert!(missing.is_empty(), "untranslated Portuguese menu labels: {missing:#?}");
+        // beyond the menus: panels, effects and their parameters, settings, status messages
+        for (en, pt) in [
+            ("File", "Arquivo"),
+            ("Settings", "Preferências"),
+            ("Gaussian Blur", "Desfoque gaussiano"),
+            ("Audio Track Mixer", "Misturador de faixas de áudio"),
+            ("Keyboard Shortcuts", "Atalhos de teclado"),
+            ("Playhead", "Cursor de reprodução"),
+        ] {
+            assert_eq!(Language::PtBr.tr(en), pt);
+        }
+        set_current(Language::PtBr);
+        assert!(matches_query("Gaussian Blur", "desfoque"));
+        assert!(matches_query("Gaussian Blur", "gaussian"));
+        set_current(Language::En);
     }
 
     /// Every `tl!`/`tlf!` literal outside test modules has a Spanish translation.
@@ -921,17 +964,13 @@ mod tests {
         for (_, en, _) in entries {
             assert!(known(&en) || en == "Settings", "not a menu label: {en}");
         }
-        let (portuguese, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
-        for (_, en, _) in portuguese {
-            assert!(Language::Uk.has(&en), "missing Ukrainian menu label: {en}");
-        }
         for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
             assert_ne!(Language::Uk.tr(en), en, "untranslated Ukrainian menu: {en}");
         }
     }
 
-    /// German covers at least the core menus (the Brazilian Portuguese entries, the top-level menus
-    /// and the native macOS Settings menu); every entry must still be a menu label.
+    /// German covers at least the core menus (`core_menu_labels`, the top-level menus and the native
+    /// macOS Settings menu); every entry must still be a menu label.
     #[test]
     fn german_entries_cover_the_original_menu_catalog() {
         let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
@@ -941,8 +980,7 @@ mod tests {
         for (_, en, _) in entries {
             assert!(known(&en) || en == "Settings", "not a menu label: {en}");
         }
-        let (portuguese, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
-        for (_, en, _) in portuguese {
+        for en in core_menu_labels() {
             assert!(Language::De.has(&en), "missing German menu label: {en}");
         }
         // "Clip" and "Audio" are the same word in German, so check for an entry, not a change
@@ -963,8 +1001,7 @@ mod tests {
         for (ctx, en, _) in &entries {
             assert!(ctx.is_empty() && (Language::Es.has(en) || en == "Settings"), "French entry without a Spanish one: {ctx:?} {en:?}");
         }
-        let (portuguese, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
-        for (_, en, _) in portuguese {
+        for en in core_menu_labels() {
             assert!(Language::Fr.has(&en), "missing French menu label: {en}");
         }
         for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
@@ -991,8 +1028,7 @@ mod tests {
         for (_, en, _) in entries {
             assert!(known(&en) || en == "Settings", "not a menu label: {en}");
         }
-        let (portuguese, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
-        for (_, en, _) in portuguese {
+        for en in core_menu_labels() {
             assert!(Language::Ru.has(&en), "missing Russian menu label: {en}");
         }
         for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
@@ -1031,6 +1067,15 @@ mod tests {
         // Include the entire alphabet, even letters not yet used by a translated menu label.
         let alphabet = "АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯабвгґдеєжзиіїйклмнопрстуфхцчшщьюя";
         assert_bundled_fonts_cover(alphabet.chars().chain(Language::Uk.name().chars()).chain(entries.iter().flat_map(|(_, _, uk)| uk.chars())));
+    }
+
+    #[test]
+    fn portuguese_renders_with_bundled_fonts() {
+        let (entries, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
+        // every Portuguese letter, even ones no entry uses yet, and every letter the entries use
+        let alphabet = "ÁÂÃÀÇÉÊÍÓÔÕÚÜáâãàçéêíóôõúü";
+        let letters = entries.iter().flat_map(|(_, _, pt)| pt.chars()).filter(|ch| ch.is_alphabetic());
+        assert_bundled_fonts_cover(alphabet.chars().chain(Language::PtBr.name().chars()).chain(letters));
     }
 
     #[test]
