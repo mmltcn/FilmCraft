@@ -3544,3 +3544,10 @@
 	Edit Project Notes	プロジェクトメモを編集
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	このプロジェクトのメモ: やること、指示、フレーム番号など… プロジェクトと一緒に保存されます。
 	GPU acceleration is unavailable; preview renders on the CPU	GPU アクセラレーションを利用できません。プレビューは CPU でレンダリングされます
+	Label Color Presets	ラベルカラープリセット
+	{name} (Modified)	{name} (変更あり)
+	Revert to the preset's colors and names	プリセットのカラーと名前に戻す
+	Import a preset file…	プリセットファイルを読み込み…
+	Export the labels to a preset file…	ラベルをプリセットファイルに書き出し…
+	Show the presets folder	プリセットフォルダーを表示
+	Delete this preset	このプリセットを削除

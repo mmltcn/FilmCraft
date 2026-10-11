@@ -426,3 +426,130 @@ fn playhead_drag_snaps_to_cuts() {
     let ph = d.harness.state().session.playhead();
     assert!(ph > cut, "moves off the cut freely: {ph:?} vs {cut:?}");
 }
+
+/// Settings ▸ Labels ▸ Label Color Presets: the dropdown shows "(Modified)" once the labels differ
+/// from the preset and Revert brings them back; Import copies a preset file into the presets folder
+/// beside the preferences and selects it (a bad file only shows an error); Export writes the
+/// dialog's labels; Show Folder opens the folder; Delete removes user presets only. Choosing a
+/// preset applies on OK like the other fields, and Cancel discards it.
+#[test]
+fn label_color_presets() {
+    use std::sync::{Arc, Mutex};
+    let mut d = Driver::demo();
+    let dir = std::env::temp_dir().join(format!("filmcraft-label-presets-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let folder = dir.join("Label Presets");
+    let picked: Arc<Mutex<Option<String>>> = Arc::default();
+    let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+    {
+        let app = d.harness.state_mut();
+        app.session.prefs_path = Some(dir.join("preferences.json"));
+        let p = picked.clone();
+        app.hooks.pick_open_file = Some(Box::new(move |_, _| p.lock().unwrap().clone()));
+        let p = picked.clone();
+        app.hooks.pick_save_as = Some(Box::new(move |_, _, _| p.lock().unwrap().clone()));
+        let o = opened.clone();
+        app.hooks.open_path = Some(Box::new(move |path, _| {
+            o.lock().unwrap().push(path.to_string());
+            Ok(())
+        }));
+    }
+    let label = |d: &mut Driver, id: &str| -> String {
+        let v = d.ok("ui.elements", json!({"prefix": id}));
+        v.as_array().unwrap().iter().find(|e| e["id"] == id).and_then(|e| e["label"].as_str().map(str::to_string)).unwrap_or_default()
+    };
+    let preset = |name: &str, color: &str| {
+        let labels: Vec<Value> = (0..16).map(|i| json!({"name": format!("{name} {i}"), "color": color})).collect();
+        serde_json::to_vec(&json!({"name": name, "labels": labels})).unwrap()
+    };
+
+    d.menu("app.settings.labels");
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Default");
+    d.ok("ui.set", json!({"settings": {"values": {"labels.colors.rose.name": "Hero"}}}));
+    d.frames(2);
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Default (Modified)");
+    d.click("settings.labelPresets.revert");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"]["name"], "Rose");
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Default");
+
+    // the other built-ins come after Default, can be chosen and reverted to, and can't be deleted
+    d.click("settings.labels.preset");
+    let items = d.ok("ui.elements", json!({"prefix": "settings.labels.preset."}));
+    let order: Vec<String> =
+        items.as_array().unwrap().iter().filter_map(|e| e["id"].as_str()?.strip_prefix("settings.labels.preset.").map(str::to_string)).collect();
+    assert_eq!(order, ["Default", "Bright", "Roles"]);
+    d.click("settings.labels.preset.Roles");
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Roles");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["violet"], json!({"name": "B-Roll", "color": "#5b8fd4"}));
+    d.click("settings.labels.preset");
+    d.click("settings.labels.preset.Bright");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"], json!({"name": "Mint", "color": "#2fd69a"}));
+    d.ok("ui.set", json!({"settings": {"values": {"labels.colors.rose.color": "#000000"}}}));
+    d.frames(2);
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Bright (Modified)");
+    d.click("settings.labelPresets.revert");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"]["color"], "#2fd69a");
+    d.click("settings.labelPresets.delete");
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Bright", "built-ins can't be deleted");
+    assert_eq!(d.draft()["preset_message"], "");
+    d.click("settings.labels.preset");
+    d.click("settings.labels.preset.Default");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"], json!({"name": "Rose", "color": d.pref("labels.colors.rose.color")}));
+
+    // a bad file: an error in the dialog, nothing changes
+    let bad = dir.join("bad.json");
+    std::fs::write(&bad, preset("Bad", "#zzzzzz")).unwrap();
+    *picked.lock().unwrap() = Some(bad.to_string_lossy().into());
+    let before = d.draft()["values"]["labels"].clone();
+    d.click("settings.labelPresets.import");
+    assert!(d.draft()["preset_message"].as_str().unwrap().contains("color"), "{}", d.draft()["preset_message"]);
+    assert_eq!(d.draft()["values"]["labels"], before);
+    assert!(!folder.join("Bad.json").exists());
+
+    // a good one is copied into the folder and selected
+    let good = dir.join("from a colleague.json");
+    std::fs::write(&good, preset("Team", "#102030")).unwrap();
+    *picked.lock().unwrap() = Some(good.to_string_lossy().into());
+    d.click("settings.labelPresets.import");
+    assert!(folder.join("Team.json").is_file());
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Team");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"], json!({"name": "Team 6", "color": "#102030"}));
+    d.ok("ui.set", json!({"settings": {"values": {"labels.colors.rose.name": "Hero"}}}));
+    d.shot("labels-presets");
+    d.click("settings.labelPresets.revert");
+
+    // export writes what the dialog shows
+    d.ok("ui.set", json!({"settings": {"values": {"labels.colors.violet.color": "#abcdef"}}}));
+    let out = dir.join("Shared.json");
+    *picked.lock().unwrap() = Some(out.to_string_lossy().into());
+    d.click("settings.labelPresets.export");
+    let written: Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!(written["name"], "Shared");
+    assert_eq!(written["labels"][0], json!({"name": "Team 0", "color": "#abcdef"}));
+
+    d.click("settings.labelPresets.folder");
+    assert_eq!(*opened.lock().unwrap(), [folder.to_string_lossy().to_string()]);
+
+    // Cancel discards the choice; picking it again and OK applies it
+    d.click("settings.cancel");
+    assert_eq!(d.pref("labels.preset"), "Default");
+    assert_eq!(d.pref("labels.colors.rose.name"), "Rose");
+    d.menu("app.settings.labels");
+    d.click("settings.labels.preset");
+    d.click("settings.labels.preset.Team");
+    d.click("settings.ok");
+    assert_eq!(d.pref("labels.preset"), "Team");
+    assert_eq!(d.pref("labels.colors.rose.color"), "#102030");
+
+    // Delete: user presets only
+    d.menu("app.settings.labels");
+    d.click("settings.labelPresets.delete");
+    assert!(!folder.join("Team.json").exists());
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Default (Modified)", "the colours stay until reverted");
+    std::fs::write(folder.join("keep.json"), preset("Keep", "#405060")).unwrap();
+    d.click("settings.labelPresets.delete");
+    assert!(folder.join("keep.json").exists(), "the built-in preset can't be deleted, and nothing else goes");
+    d.click("settings.cancel");
+    let _ = std::fs::remove_dir_all(&dir);
+}
