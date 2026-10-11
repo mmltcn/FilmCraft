@@ -29,6 +29,7 @@
 use std::ffi::{c_int, c_uint, c_ulong, c_void};
 pub const cudaVideoCodec_H264: c_int = 4;
 pub const cudaVideoCodec_HEVC: c_int = 8;
+pub const cudaVideoCodec_AV1: c_int = 16;
 pub const cudaVideoChromaFormat_420: c_int = 1;
 pub const cudaVideoSurfaceFormat_NV12: c_int = 0;
 pub const cudaVideoSurfaceFormat_P016: c_int = 1;

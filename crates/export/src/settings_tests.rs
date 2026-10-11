@@ -496,7 +496,7 @@ fn h265_is_a_format_that_needs_a_registered_encoder() {
     }
     assert_eq!(Format::from_name(Format::Hevc.id()), Some(Format::Hevc));
     assert_eq!((Format::Hevc.extension(), Format::Hevc.label()), ("mp4", "H.265 (HEVC)"));
-    assert!(Format::ALL.contains(&Format::Hevc) && Format::ALL.len() == 14);
+    assert!(Format::ALL.contains(&Format::Hevc) && Format::ALL.len() == 15);
     let s: ExportSettings = serde_json::from_value(serde_json::json!({"format": "hevc"})).unwrap();
     assert_eq!(s.format, Format::Hevc);
     assert_eq!(serde_json::to_value(&s).unwrap()["format"], "hevc");
@@ -537,6 +537,41 @@ fn h265_is_a_format_that_needs_a_registered_encoder() {
     assert!(available(Format::Hevc));
     HERE.store(false, Ordering::SeqCst);
     assert!(!available(Format::Hevc));
+}
+
+#[test]
+fn av1_is_a_format_that_needs_a_registered_encoder() {
+    for name in ["av1", "AV1", "av01"] {
+        assert_eq!(Format::from_name(name), Some(Format::Av1), "{name}");
+    }
+    assert_eq!(Format::from_name(Format::Av1.id()), Some(Format::Av1));
+    assert_eq!((Format::Av1.extension(), Format::Av1.label()), ("mp4", "AV1"));
+    assert!(Format::ALL.contains(&Format::Av1));
+    let s: ExportSettings = serde_json::from_value(serde_json::json!({"format": "av1"})).unwrap();
+    assert_eq!(s.format, Format::Av1);
+    assert_eq!(serde_json::to_value(&s).unwrap()["format"], "av1");
+
+    let a = ExportSettings { format: Format::Av1, ..Default::default() };
+    assert_eq!((a.audio_codec(), a.extension()), (AudioCodec::Aac, "mp4"));
+    assert_eq!(ExportSettings { multiplexer: Multiplexer::Mov, ..a.clone() }.extension(), "mov");
+
+    let summary = a.summary(1920, 1080, FrameRate::FPS_25, 48_000, Tick(10 * TICKS_PER_SECOND));
+    assert_eq!(summary.format, "AV1 (MP4)");
+    assert!(summary.video.contains("AV1 Main") && summary.video.contains("Target 20.00 Mbps"), "{}", summary.video);
+
+    let e = ExportSettings { bitrate_mode: BitrateMode::Vbr2Pass, ..a.clone() }.validate().unwrap_err();
+    assert!(e.to_string().contains("two-pass"), "{e}");
+    assert!(ExportSettings { bitrate_mode: BitrateMode::Cbr, ..a.clone() }.validate().is_ok());
+
+    assert!(Format::Av1.has_builtin_encoder());
+    assert!(available(Format::Av1));
+    let (p, seq, m) = matte([0.0, 0.0, 1.0, 1.0], 160, 90, None);
+    let sc = Scratch::new("av1-export");
+    let out_path = sc.path("x.mp4");
+    let rep = export(&p, seq, &ExportSettings { path: out_path.clone(), include_audio: false, ..a }, &m, &Progress::default()).unwrap();
+    assert!(rep.bytes > 0);
+    assert_eq!(rep.frames, 24);
+    assert!(std::path::Path::new(&out_path).exists());
 }
 
 #[test]

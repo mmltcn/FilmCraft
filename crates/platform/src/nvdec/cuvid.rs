@@ -4,12 +4,38 @@ use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
-use filmcraft_codecs::hw::NalCodec;
+use filmcraft_codecs::hw::{FrameCodec, NalCodec};
 use filmcraft_frame::VideoFrame;
 
 use super::ffi::*;
 use crate::biplanar::{Biplanar, Geometry, to_frame};
 use crate::nvenc::device::Device;
+
+/// Codecs supported by NVDEC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NvdecCodec {
+    H264,
+    Hevc,
+    Av1,
+}
+
+impl From<NalCodec> for NvdecCodec {
+    fn from(c: NalCodec) -> Self {
+        match c {
+            NalCodec::H264 => NvdecCodec::H264,
+            NalCodec::Hevc => NvdecCodec::Hevc,
+        }
+    }
+}
+
+impl From<FrameCodec> for NvdecCodec {
+    fn from(c: FrameCodec) -> Self {
+        match c {
+            FrameCodec::Av1 => NvdecCodec::Av1,
+            FrameCodec::Vp9 => NvdecCodec::H264, // Not used
+        }
+    }
+}
 
 const MAX_SURFACES: u32 = 64;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
@@ -356,14 +382,16 @@ pub struct Session {
 // calling thread.
 unsafe impl Send for Session {}
 impl Session {
-    pub fn new(codec: NalCodec, coded: (u32, u32), geometry: Geometry, reorder: usize) -> Result<Self, String> {
+    pub fn new(codec: impl Into<NvdecCodec>, coded: (u32, u32), geometry: Geometry, reorder: usize) -> Result<Self, String> {
+        let codec = codec.into();
         let delay = validate(coded, geometry, reorder)?;
-        if matches!(codec, NalCodec::H264) && geometry.bits != 8 {
+        if matches!(codec, NvdecCodec::H264) && geometry.bits != 8 {
             return Err("NVDEC only takes 8-bit H.264".into());
         }
         let codec = match codec {
-            NalCodec::H264 => cudaVideoCodec_H264,
-            NalCodec::Hevc => cudaVideoCodec_HEVC,
+            NvdecCodec::H264 => cudaVideoCodec_H264,
+            NvdecCodec::Hevc => cudaVideoCodec_HEVC,
+            NvdecCodec::Av1 => cudaVideoCodec_AV1,
         };
         let (api, library) = Api::load()?;
         let device = Box::new(Device::new()?);

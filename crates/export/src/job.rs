@@ -186,17 +186,20 @@ pub struct Exporter {
 
 /// Whether [`Exporter`] handles a format.
 pub fn stepped(format: Format) -> bool {
-    matches!(format, Format::H264 | Format::Hevc | Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg | Format::MxfOp1a | Format::MxfOpAtom)
+    matches!(
+        format,
+        Format::H264 | Format::Hevc | Format::Av1 | Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg | Format::MxfOp1a | Format::MxfOpAtom
+    )
 }
 
 /// Whether an export is HDR: an HDR working space, SDR not asked for, and a format whose encoder
-/// writes HDR (`hdr_available` says so for H.265, which has no built-in encoder).
+/// writes HDR (`hdr_available` says so for H.265 and AV1, which have no built-in encoder).
 pub(crate) fn hdr_output(working_hdr: bool, sdr: bool, format: Format, hdr_available: impl Fn(Format) -> bool) -> bool {
     working_hdr
         && !sdr
         && match format {
             Format::H264 | Format::ProRes | Format::DnxHr | Format::Apv => true,
-            Format::Hevc => hdr_available(Format::Hevc),
+            Format::Hevc | Format::Av1 => hdr_available(format),
             _ => false,
         }
 }

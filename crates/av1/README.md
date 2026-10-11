@@ -131,5 +131,10 @@ for sample in samples {                  // one temporal unit (MP4 / Matroska sa
         // pic.width, pic.height, pic.bit_depth, pic.planes[0..3], pic.pts
     }
 }
-let rest = dec.flush();                  // pictures still in flight at the end
+let rest = dec.flush()?;                 // pictures still in flight; propagates worker errors
 ```
+
+Decoder allocations are limited to 8192 samples per dimension and 8192×4320 pixels.
+Larger sequence/frame sizes return an unsupported error before frame allocation.
+Worker panics become `Error::WorkerFailed` and complete their reference/output slots;
+both shown and hidden frame errors are propagated by `flush` / `flush_result`.

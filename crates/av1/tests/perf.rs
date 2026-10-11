@@ -45,7 +45,7 @@ fn run(frames: &[Vec<u8>], threads: usize) -> Run {
     for f in frames {
         shown += dec.decode(f).unwrap().len();
     }
-    shown += dec.flush().len();
+    shown += dec.flush().expect("flush").len();
     let cpu = c0.and_then(|c0| thread_cpu_secs().map(|c1| c1 - c0));
     Run { wall: t.elapsed().as_secs_f64(), cpu, shown, stats: dec.stats() }
 }

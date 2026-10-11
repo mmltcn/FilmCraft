@@ -7,9 +7,10 @@
 //! outside themselves), which are then copied into the frame.
 
 use crate::decoder::RefFrame;
-use crate::frame::{FrameBuf, MiInfo};
+use crate::frame::{FrameBuf, MiInfo, allocate, allocate3};
 use crate::header::{FrameHeader, RefInfo, SequenceHeader};
 use crate::spec_tables::*;
+use crate::{Error, Result};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -52,8 +53,8 @@ pub(crate) struct Grid8 {
 }
 
 impl Grid8 {
-    fn new(ox: usize, oy: usize, stride: usize, rows: usize) -> Grid8 {
-        Grid8 { data: vec![0; stride * rows], ox, oy, stride, rows }
+    fn new(ox: usize, oy: usize, stride: usize, rows: usize) -> Result<Grid8> {
+        Ok(Grid8 { data: allocate(0, stride.checked_mul(rows).ok_or(Error::AllocationFailed)?)?, ox, oy, stride, rows })
     }
     #[inline]
     pub fn get(&self, row: usize, col: usize) -> u8 {
@@ -72,6 +73,10 @@ impl Grid8 {
             dst.data[d..d + self.stride].copy_from_slice(&self.data[y * self.stride..(y + 1) * self.stride]);
         }
     }
+}
+
+fn grid_array(mut f: impl FnMut(usize) -> Result<Grid8>) -> Result<[Grid8; 3]> {
+    Ok([f(0)?, f(1)?, f(2)?])
 }
 
 /// Loop restoration parameters per unit.
@@ -106,24 +111,24 @@ pub(crate) struct TileState {
 }
 
 impl TileState {
-    fn with(cur: FrameBuf, mi: MiInfo, cdef: Vec<i8>, lf_tx_size: [Grid8; 3], lr: LrUnits, cdef_cols: usize) -> TileState {
+    fn with(cur: FrameBuf, mi: MiInfo, cdef: Vec<i8>, lf_tx_size: [Grid8; 3], lr: LrUnits, cdef_cols: usize) -> Result<TileState> {
         let (mi_cols, mi_rows) = (mi.cols, mi.rows);
-        TileState {
+        Ok(TileState {
             cur,
             mi,
             cdef,
             lf_tx_size,
             lr,
             lr_written: Default::default(),
-            above_level: std::array::from_fn(|_| vec![0; mi_cols + 64]),
-            above_dc: std::array::from_fn(|_| vec![0; mi_cols + 64]),
-            above_seg_pred: vec![0; mi_cols + 64],
-            left_level: std::array::from_fn(|_| vec![0; mi_rows + 64]),
-            left_dc: std::array::from_fn(|_| vec![0; mi_rows + 64]),
-            left_seg_pred: vec![0; mi_rows + 64],
+            above_level: allocate3(0, mi_cols + 64)?,
+            above_dc: allocate3(0, mi_cols + 64)?,
+            above_seg_pred: allocate(0, mi_cols + 64)?,
+            left_level: allocate3(0, mi_rows + 64)?,
+            left_dc: allocate3(0, mi_rows + 64)?,
+            left_seg_pred: allocate(0, mi_rows + 64)?,
             intra_frame_y_mode_cdf: DEFAULT_INTRA_FRAME_Y_MODE_CDF,
             cdef_cols,
-        }
+        })
     }
 
     #[inline]
@@ -172,12 +177,12 @@ fn count_units_in_frame(unit_size: usize, frame_size: usize) -> usize {
 }
 
 impl FrameState {
-    pub fn new(seq: &SequenceHeader, fh: &FrameHeader) -> FrameState {
+    pub fn new(seq: &SequenceHeader, fh: &FrameHeader) -> Result<FrameState> {
         let c = &seq.color;
         let (ssx, ssy) = (c.subsampling_x as usize, c.subsampling_y as usize);
         let mi_cols = fh.mi_cols as usize;
         let mi_rows = fh.mi_rows as usize;
-        let cur = FrameBuf::new(fh.frame_width as usize, fh.frame_height as usize, c.num_planes, ssx, ssy, c.bit_depth);
+        let cur = FrameBuf::new(fh.frame_width as usize, fh.frame_height as usize, c.num_planes, ssx, ssy, c.bit_depth)?;
         let cdef_cols = mi_cols.div_ceil(16) + 2;
         let cdef_rows = mi_rows.div_ceil(16) + 2;
         let mut lr_unit_rows = [0; 3];
@@ -193,12 +198,12 @@ impl FrameState {
             lr_unit_rows[plane] = count_units_in_frame(unit, (fh.frame_height as usize + sub_y) >> sub_y);
             lr_unit_cols[plane] = count_units_in_frame(unit, (fh.upscaled_width as usize + sub_x) >> sub_x);
             let n = lr_unit_rows[plane] * lr_unit_cols[plane];
-            lr.lr_type[plane] = vec![RESTORE_NONE as u8; n];
-            lr.lr_wiener[plane] = vec![[[0; 3]; 2]; n];
-            lr.lr_sgr_set[plane] = vec![0; n];
-            lr.lr_sgr_xqd[plane] = vec![[0; 2]; n];
+            lr.lr_type[plane] = allocate(RESTORE_NONE as u8, n)?;
+            lr.lr_wiener[plane] = allocate([[0; 3]; 2], n)?;
+            lr.lr_sgr_set[plane] = allocate(0, n)?;
+            lr.lr_sgr_xqd[plane] = allocate([0; 2], n)?;
         }
-        FrameState {
+        Ok(FrameState {
             sh: FrameShared {
                 seq: seq.clone(),
                 fh: fh.clone(),
@@ -212,14 +217,14 @@ impl FrameState {
                 refs: Default::default(),
                 ref_info: Default::default(),
                 motion_field: Default::default(),
-                prev_segment_ids: vec![0; mi_cols * mi_rows],
+                prev_segment_ids: allocate(0, mi_cols.checked_mul(mi_rows).ok_or(Error::AllocationFailed)?)?,
             },
             cur,
-            mi: MiInfo::new(mi_cols, mi_rows, fh.allow_screen_content_tools),
-            cdef: vec![-1; cdef_cols * cdef_rows],
-            lf_tx_size: std::array::from_fn(|_| Grid8::new(0, 0, mi_cols + 32, mi_rows + 32)),
+            mi: MiInfo::new(mi_cols, mi_rows, fh.allow_screen_content_tools)?,
+            cdef: allocate(-1, cdef_cols.checked_mul(cdef_rows).ok_or(Error::AllocationFailed)?)?,
+            lf_tx_size: grid_array(|_| Grid8::new(0, 0, mi_cols + 32, mi_rows + 32))?,
             lr,
-        }
+        })
     }
 
     #[inline]
@@ -233,7 +238,7 @@ impl FrameState {
     }
 
     /// Move the frame's buffers into a tile state covering the whole frame.
-    pub fn take_tile_state(&mut self) -> TileState {
+    pub fn take_tile_state(&mut self) -> Result<TileState> {
         TileState::with(
             std::mem::take(&mut self.cur),
             std::mem::take(&mut self.mi),
@@ -255,21 +260,21 @@ impl FrameState {
 
     /// Private buffers for the tile covering mode info rows [r0, r1) x columns [c0, c1); tiles
     /// on the right / bottom frame edge also cover the allocation margins.
-    pub fn tile_state(&self, r0: usize, r1: usize, c0: usize, c1: usize) -> TileState {
+    pub fn tile_state(&self, r0: usize, r1: usize, c0: usize, c1: usize) -> Result<TileState> {
         let (mi_cols, mi_rows) = (self.mi.cols, self.mi.rows);
         let x1 = if c1 >= mi_cols { usize::MAX } else { c1 * 4 };
         let y1 = if r1 >= mi_rows { usize::MAX } else { r1 * 4 };
-        let cur = self.cur.region_like(c0 * 4, r0 * 4, x1, y1);
-        let mi = MiInfo::region(mi_cols, mi_rows, c0, r0, c1 - c0, r1 - r0, !self.mi.palette_size[0].is_empty());
-        let lf = std::array::from_fn(|p| {
+        let cur = self.cur.region_like(c0 * 4, r0 * 4, x1, y1)?;
+        let mi = MiInfo::region(mi_cols, mi_rows, c0, r0, c1 - c0, r1 - r0, !self.mi.palette_size[0].is_empty())?;
+        let lf = grid_array(|p| {
             let (sx, sy) = if p == 0 { (0, 0) } else { (self.ssx, self.ssy) };
             let full = &self.lf_tx_size[p];
             let (gx0, gy0) = (c0 >> sx, r0 >> sy);
             let gx1 = if c1 >= mi_cols { full.stride } else { c1 >> sx };
             let gy1 = if r1 >= mi_rows { full.rows } else { r1 >> sy };
             Grid8::new(gx0, gy0, gx1 - gx0, gy1 - gy0)
-        });
-        TileState::with(cur, mi, vec![-1; self.cdef.len()], lf, self.lr.clone(), self.cdef_cols)
+        })?;
+        TileState::with(cur, mi, allocate(-1, self.cdef.len())?, lf, self.lr.clone(), self.cdef_cols)
     }
 
     /// Copy a tile's private buffers into the frame.

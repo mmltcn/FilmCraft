@@ -201,16 +201,29 @@ impl VideoDecoder for HybridDecoder {
     }
 
     fn flush(&mut self) -> Vec<DecodedFrame> {
+        match self.flush_result() {
+            Ok(frames) => frames,
+            Err(e) => {
+                log::error!("hybrid decoder flush failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    fn flush_result(&mut self) -> Result<Vec<DecodedFrame>> {
         if let Some(hw) = self.hw.as_mut() {
-            let out = hw.flush();
+            let out = hw.flush_result()?;
             filmcraft_codecs::hw::note_hw_frames(out.len());
             self.note_emitted(&out);
-            return out;
+            return Ok(out);
         }
-        let frames = self.sw.as_mut().map(|d| d.flush()).unwrap_or_default();
+        let frames = match self.sw.as_mut() {
+            Some(d) => d.flush_result()?,
+            None => Vec::new(),
+        };
         let mut out = self.merge(frames);
         out.extend(std::mem::take(&mut self.carry).into_values());
-        out
+        Ok(out)
     }
 
     fn reset(&mut self) {

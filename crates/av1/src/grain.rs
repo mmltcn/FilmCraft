@@ -1,8 +1,9 @@
 //! Film grain synthesis (7.18.3), applied to output pictures only (references stay clean).
 
-use crate::Picture;
+use crate::frame::{allocate, allocate3};
 use crate::header::{FilmGrainParams, SequenceHeader};
 use crate::spec_tables::{GAUSSIAN_SEQUENCE, MC_IDENTITY};
+use crate::{Picture, Result};
 
 #[inline]
 fn round2(x: i32, n: u32) -> i32 {
@@ -22,7 +23,7 @@ impl Rng {
     }
 }
 
-pub(crate) fn apply(pic: &mut Picture, g: &FilmGrainParams, seq: &SequenceHeader) {
+pub(crate) fn apply(pic: &mut Picture, g: &FilmGrainParams, seq: &SequenceHeader) -> Result<()> {
     let _ = seq;
     let bd = pic.bit_depth as u32;
     let mono = pic.mono_chrome;
@@ -37,7 +38,7 @@ pub(crate) fn apply(pic: &mut Picture, g: &FilmGrainParams, seq: &SequenceHeader
     // Generate grain (7.18.3.3).
     let mut rng = Rng(g.grain_seed);
     let shift = 12 - bd + g.grain_scale_shift;
-    let mut luma = vec![[0i32; 82]; 73];
+    let mut luma = allocate([0i32; 82], 73)?;
     for row in luma.iter_mut() {
         for v in row.iter_mut() {
             let gv = if g.num_y_points > 0 { GAUSSIAN_SEQUENCE[rng.next(11) as usize] as i32 } else { 0 };
@@ -65,8 +66,8 @@ pub(crate) fn apply(pic: &mut Picture, g: &FilmGrainParams, seq: &SequenceHeader
     }
     let chroma_w = if sub_x != 0 { 44 } else { 82 };
     let chroma_h = if sub_y != 0 { 38 } else { 73 };
-    let mut cb = vec![[0i32; 82]; 73];
-    let mut cr = vec![[0i32; 82]; 73];
+    let mut cb = allocate([0i32; 82], 73)?;
+    let mut cr = allocate([0i32; 82], 73)?;
     if !mono {
         for (arr, seed, on) in [(&mut cb, 0xb524u32, g.num_cb_points > 0), (&mut cr, 0x49d8, g.num_cr_points > 0)] {
             rng.0 = g.grain_seed ^ seed;
@@ -158,7 +159,7 @@ pub(crate) fn apply(pic: &mut Picture, g: &FilmGrainParams, seq: &SequenceHeader
     // Noise stripes (7.18.3.5).
     let stripe_w = w + 64;
     let n_stripes = (h.div_ceil(2)).div_ceil(16).max(1);
-    let mut stripes: Vec<[Vec<i32>; 3]> = (0..n_stripes).map(|_| [vec![0; 34 * stripe_w], vec![0; 34 * stripe_w], vec![0; 34 * stripe_w]]).collect();
+    let mut stripes: Vec<[Vec<i32>; 3]> = (0..n_stripes).map(|_| allocate3(0, 34 * stripe_w)).collect::<Result<_>>()?;
     let overlap = g.overlap_flag;
     for (luma_num, stripe) in stripes.iter_mut().enumerate() {
         let mut r = g.grain_seed;
@@ -273,4 +274,5 @@ pub(crate) fn apply(pic: &mut Picture, g: &FilmGrainParams, seq: &SequenceHeader
             }
         }
     }
+    Ok(())
 }

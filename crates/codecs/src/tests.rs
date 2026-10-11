@@ -7,8 +7,8 @@ use std::sync::Arc;
 use filmcraft_media::FrameRequest;
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 
-fn ffmpeg() -> Option<&'static str> {
-    ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"].into_iter().find(|p| std::path::Path::new(p).exists())
+fn ffmpeg() -> Option<PathBuf> {
+    filmcraft_testkit::ffmpeg_or_skip("codecs oracle")
 }
 
 fn fixture(name: &str, args: &[&str]) -> Option<Arc<[u8]>> {
@@ -17,16 +17,13 @@ fn fixture(name: &str, args: &[&str]) -> Option<Arc<[u8]>> {
         None
     })?;
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/codecs");
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir_all(&dir).expect("create codec fixture directory");
     let out = dir.join(name);
     if !out.exists() {
-        let st = Command::new(ff).args(["-y", "-v", "error"]).args(args).arg(&out).status().ok()?;
-        if !st.success() {
-            eprintln!("fixture {name} failed; skipping");
-            return None;
-        }
+        let st = Command::new(ff).args(["-y", "-v", "error"]).args(args).arg(&out).status().expect("run codec fixture oracle");
+        assert!(st.success(), "fixture {name} failed: {st}");
     }
-    Some(std::fs::read(out).ok()?.into())
+    Some(std::fs::read(out).expect("read codec fixture").into())
 }
 
 #[test]

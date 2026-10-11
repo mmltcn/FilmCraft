@@ -70,6 +70,11 @@ pub enum Format {
     /// ([`hdr_available`]); elsewhere they are tone-mapped to SDR.
     #[serde(rename = "hevc", alias = "Hevc")]
     Hevc,
+    /// MPEG-4 (or QuickTime, see [`Multiplexer`]), AV1 Main profile (8-bit or 10-bit HDR) video + AAC audio.
+    /// There is no built-in encoder: a platform hardware encoder registers one ([`register_encoder`])
+    /// and says so with [`register_format_probe`]; [`available`] is false without it.
+    #[serde(rename = "av1", alias = "Av1", alias = "AV1")]
+    Av1,
     /// QuickTime, Apple ProRes 422 (HQ unless the settings pick another flavour) + PCM.
     #[serde(rename = "prores", alias = "ProRes")]
     ProRes,
@@ -112,6 +117,7 @@ impl Format {
         Some(match s.to_ascii_lowercase().replace([' ', '-', '_', '.'], "").as_str() {
             "h264" | "mp4" | "avc" | "m4v" => Format::H264,
             "hevc" | "h265" | "hvc1" | "hev1" | "x265" => Format::Hevc,
+            "av1" | "av01" => Format::Av1,
             "prores" | "mov" | "appleprores" => Format::ProRes,
             "dnxhr" | "dnxhd" | "dnx" | "avid" | "aviddnxhr" | "aviddnxhd" | "vc3" => Format::DnxHr,
             "apv" | "apv1" => Format::Apv,
@@ -132,6 +138,7 @@ impl Format {
         match self {
             Format::H264 => "h264",
             Format::Hevc => "hevc",
+            Format::Av1 => "av1",
             Format::ProRes => "prores",
             Format::DnxHr => "dnxhr",
             Format::Apv => "apv",
@@ -148,7 +155,7 @@ impl Format {
     }
     pub fn extension(self) -> &'static str {
         match self {
-            Format::H264 | Format::Hevc => "mp4",
+            Format::H264 | Format::Hevc | Format::Av1 => "mp4",
             Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg => "mov",
             Format::PngSequence => "png",
             Format::TiffSequence => "tif",
@@ -163,6 +170,7 @@ impl Format {
         match self {
             Format::H264 => "H.264",
             Format::Hevc => "H.265 (HEVC)",
+            Format::Av1 => "AV1",
             Format::ProRes => "Apple ProRes",
             Format::DnxHr => "Avid DNxHR",
             Format::Apv => "APV",
@@ -184,15 +192,16 @@ impl Format {
     /// Whether the crate carries an encoder for the format; the others need one registered at runtime
     /// ([`register_format_probe`]).
     pub fn has_builtin_encoder(self) -> bool {
-        self != Format::Hevc
+        !matches!(self, Format::Hevc)
     }
-    /// H.264 or H.265: MPEG-4 (or QuickTime) with AAC audio, set up with the same bitrate controls.
+    /// H.264, H.265 or AV1: MPEG-4 (or QuickTime) with AAC audio, set up with the same bitrate controls.
     pub fn is_h26x(self) -> bool {
-        matches!(self, Format::H264 | Format::Hevc)
+        matches!(self, Format::H264 | Format::Hevc | Format::Av1)
     }
-    pub const ALL: [Format; 14] = [
+    pub const ALL: [Format; 15] = [
         Format::H264,
         Format::Hevc,
+        Format::Av1,
         Format::ProRes,
         Format::DnxHr,
         Format::Apv,
@@ -521,8 +530,8 @@ impl ExportSettings {
         if self.effects.image_overlay.enabled && self.effects.image_overlay.path.trim().is_empty() {
             return Err(ExportError::Unsupported("image overlay: no image file chosen".into()));
         }
-        if self.format == Format::Hevc && self.bitrate_mode == BitrateMode::Vbr2Pass {
-            return Err(ExportError::Unsupported("H.265 export has no two-pass mode: choose CBR or VBR, 1 pass".into()));
+        if (self.format == Format::Hevc || self.format == Format::Av1) && self.bitrate_mode == BitrateMode::Vbr2Pass {
+            return Err(ExportError::Unsupported(format!("{} export has no two-pass mode: choose CBR or VBR, 1 pass", self.format.label())));
         }
         Ok(())
     }
@@ -635,7 +644,7 @@ pub type AudioEncoderFactory = fn(format: Format, sample_rate: u32, channels: u3
 
 fn video_factories() -> &'static RwLock<Vec<EncoderFactory>> {
     static F: OnceLock<RwLock<Vec<EncoderFactory>>> = OnceLock::new();
-    F.get_or_init(|| RwLock::new(vec![h264_factory, prores_factory, dnx_factory, apv_factory, mjpeg_factory]))
+    F.get_or_init(|| RwLock::new(vec![h264_factory, av1_factory, prores_factory, dnx_factory, apv_factory, mjpeg_factory]))
 }
 fn audio_factories() -> &'static RwLock<Vec<AudioEncoderFactory>> {
     static F: OnceLock<RwLock<Vec<AudioEncoderFactory>>> = OnceLock::new();
@@ -1305,6 +1314,74 @@ impl VideoEncoder for H264Encoder {
     }
 }
 
+/// AV1 Main (our encoder): sRGB/709 RGBA8 → 8-bit limited-range BT.709 4:2:0,
+/// length-delimited OBUs with the sequence header in the sample entry `av1C`.
+struct Av1Encoder {
+    enc: filmcraft_av1enc::Encoder,
+    w: u32,
+    h: u32,
+    rate: FrameRate,
+    y: Vec<u8>,
+    u: Vec<u8>,
+    v: Vec<u8>,
+    signal: ColorSignal,
+}
+
+impl VideoEncoder for Av1Encoder {
+    fn sample_entry(&self) -> SampleEntry {
+        let sh_bytes = self.enc.sequence_header_obu();
+        let cfg = filmcraft_isobmff::Av1Config {
+            seq_profile: 0,
+            seq_level_idx_0: 8,
+            seq_tier_0: false,
+            high_bitdepth: false,
+            twelve_bit: false,
+            monochrome: false,
+            chroma_subsampling_x: true,
+            chroma_subsampling_y: true,
+            chroma_sample_position: 0,
+            initial_presentation_delay_minus_one: None,
+            config_obus: sh_bytes,
+        };
+        let mut e = SampleEntry::av1(cfg, self.w as u16, self.h as u16);
+        self.signal.apply_to(&mut e, false);
+        e
+    }
+    fn timescale(&self) -> u32 {
+        self.rate.num as u32
+    }
+    fn encode(&mut self, f: &EncoderFrame) -> Result<Vec<EncodedPacket>> {
+        timed(Stage::Convert, || match f.hdr {
+            Some(rgb) => {
+                let (kr, kb) = self.signal.kr_kb();
+                rgbf_to_yuv420_8(rgb, f.width as usize, f.height as usize, kr, kb, &mut self.y, &mut self.u, &mut self.v)
+            }
+            None => rgba_to_yuv420_8(f.rgba, f.width as usize, f.height as usize, &mut self.y, &mut self.u, &mut self.v),
+        });
+        let cw = (f.width as usize).div_ceil(2);
+        let frame = filmcraft_av1enc::YuvFrame { y: &self.y, u: &self.u, v: &self.v, y_stride: f.width as usize, uv_stride: cw };
+        let p = self.enc.encode(&frame, f.index as i64 * self.rate.den).map_err(|e| ExportError::Encode(e.to_string()))?;
+        Ok(vec![EncodedPacket {
+            data: p.data,
+            key: p.keyframe,
+            duration: self.rate.den as u32,
+            composition_offset: 0,
+        }])
+    }
+    fn flush(&mut self) -> Result<Vec<EncodedPacket>> {
+        let ps = self.enc.flush().map_err(|e| ExportError::Encode(e.to_string()))?;
+        Ok(ps
+            .into_iter()
+            .map(|p| EncodedPacket {
+                data: p.data,
+                key: p.keyframe,
+                duration: self.rate.den as u32,
+                composition_offset: 0,
+            })
+            .collect())
+    }
+}
+
 /// BT.709 limited-range 8-bit 4:2:0 from straight RGBA8 (2×2 chroma average).
 pub fn rgba_to_yuv420_8(rgba: &[u8], w: usize, h: usize, y: &mut Vec<u8>, u: &mut Vec<u8>, v: &mut Vec<u8>) {
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
@@ -1470,6 +1547,21 @@ fn h264_factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSetti
     Some(
         filmcraft_h264enc::Encoder::new(cfg)
             .map(|enc| Box::new(H264Encoder { enc, w, h, rate, y: Vec::new(), u: Vec::new(), v: Vec::new(), signal: s.signal }) as Box<dyn VideoEncoder>)
+            .map_err(|e| ExportError::Encode(e.to_string())),
+    )
+}
+
+fn av1_factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
+    if format != Format::Av1 {
+        return None;
+    }
+    let mut cfg = filmcraft_av1enc::EncoderConfig::new(w, h, rate.num as u32, rate.den as u32);
+    cfg.key_int = s.keyframe_distance.filter(|k| *k > 0).unwrap_or_else(|| (rate.num as f64 / rate.den as f64 * 2.0).round().max(1.0) as u32);
+    // Map quality 0..100 to qindex (0 = high quality / qindex ~ 20, 100 = fast/low / qindex ~ 200, default quality 50 -> qindex 100)
+    cfg.qindex = (((100 - s.quality.clamp(0, 100) as u32) * 200) / 100).clamp(20, 240) as u8;
+    Some(
+        filmcraft_av1enc::Encoder::new(cfg)
+            .map(|enc| Box::new(Av1Encoder { enc, w, h, rate, y: Vec::new(), u: Vec::new(), v: Vec::new(), signal: s.signal }) as Box<dyn VideoEncoder>)
             .map_err(|e| ExportError::Encode(e.to_string())),
     )
 }
@@ -1641,7 +1733,7 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
             }
             (total, count)
         }
-        Format::H264 | Format::Hevc | Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg | Format::MxfOp1a | Format::MxfOpAtom => {
+        Format::H264 | Format::Hevc | Format::Av1 | Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg | Format::MxfOp1a | Format::MxfOpAtom => {
             // Handled by the stepped exporter above; reaching here would be a dispatch bug.
             return Err(ExportError::Unsupported(format!("{:?} must run as a stepped export", settings.format)));
         }

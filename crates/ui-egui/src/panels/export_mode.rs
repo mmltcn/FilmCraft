@@ -521,7 +521,7 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if section(ui, &mut reg, &mut ex.open_sections, "effects", tl!("Effects"), &t) {
             pick_overlay = effects_section(ui, &mut reg, s, &t);
         }
-        if matches!(s.format, Format::H264 | Format::Hevc | Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg)
+        if matches!(s.format, Format::H264 | Format::Hevc | Format::Av1 | Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg)
             && section(ui, &mut reg, &mut ex.open_sections, "metadata", tl!("Metadata"), &t)
         {
             let m = &mut s.metadata;
@@ -612,8 +612,9 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &T
         });
     }
     match s.video_format() {
-        f @ (Format::H264 | Format::Hevc) => {
+        f @ (Format::H264 | Format::Hevc | Format::Av1) => {
             let hevc = f == Format::Hevc;
+            let av1 = f == Format::Av1;
             if hevc {
                 // the hardware encoder writes Main (8-bit 4:2:0), or Main 10 for HDR sequences where it can; level chosen by the encoder
                 let label = match (filmcraft_engine::export::hdr_available(Format::Hevc), seq_hdr && !s.sdr) {
@@ -623,6 +624,14 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &T
                 };
                 row(ui, t, tl!("Profile"), |ui| ui.label(label));
                 row(ui, t, tl!("Encoder"), |ui| ui.label(tl!("Hardware (H.265 has no software encoder)")));
+            } else if av1 {
+                let label = match (filmcraft_engine::export::hdr_available(Format::Av1), seq_hdr && !s.sdr) {
+                    (true, true) => tl!("Main 10 (10-bit, HDR)"),
+                    (true, false) => tl!("Main (8-bit; Main 10 for HDR sequences)"),
+                    (false, _) => tl!("Main (8-bit)"),
+                };
+                row(ui, t, tl!("Profile"), |ui| ui.label(label));
+                row(ui, t, tl!("Encoder"), |ui| ui.label(tl!("Hardware (AV1 has no software encoder)")));
             } else {
                 row(ui, t, tl!("Profile"), |ui| {
                     let o = [H264Profile::Baseline, H264Profile::Main, H264Profile::High];
@@ -642,9 +651,9 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &T
                 });
             }
             row(ui, t, tl!("Bitrate Encoding"), |ui| {
-                // a hardware encoder has one pass: H.265 offers no two-pass mode
+                // a hardware encoder has one pass: H.265 / AV1 offer no two-pass mode
                 let o = [BitrateMode::Cbr, BitrateMode::Vbr1Pass, BitrateMode::Vbr2Pass];
-                let labels: Vec<(String, bool)> = o.iter().map(|m| (m.label().to_string(), !(hevc && *m == BitrateMode::Vbr2Pass))).collect();
+                let labels: Vec<(String, bool)> = o.iter().map(|m| (m.label().to_string(), !((hevc || av1) && *m == BitrateMode::Vbr2Pass))).collect();
                 if let Some(i) = combo(ui, reg, "export.video.bitrateMode", s.bitrate_mode.label(), &labels, 140.0) {
                     s.bitrate_mode = o[i];
                 }
@@ -688,8 +697,8 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &T
             // The system's hardware encoder where there is one (VideoToolbox on macOS, NVENC on NVIDIA
             // GPUs on Windows); everything it does not take (two-pass, HDR, MXF) and every machine
             // without one keeps the built-in encoder.
-            // H.265 has only the hardware encoder: choosing the format is the opt-in.
-            if !hevc {
+            // H.265 and AV1 have only the hardware encoder: choosing the format is the opt-in.
+            if !hevc && !av1 {
                 row(ui, t, "Hardware Encoding", |ui| {
                     let mut on = s.hardware_encoding == HardwareEncoding::Auto;
                     if check(ui, reg, "export.video.hardwareEncoding", &mut on, "Use the hardware encoder when available") {

@@ -56,7 +56,6 @@ const EXTENDED: &[&str] = &[
     "av1-1-b8-24-monochrome.ivf",
     "av1-1-b10-24-monochrome.ivf",
     "av1-1-b8-16-intra_only-intrabc-extreme-dv.ivf",
-    "av1-1-b8-16-intra-only.ivf",
     "av1-1-b8-23-film_grain-50.ivf",
     "av1-1-b10-23-film_grain-50.ivf",
 ];
