@@ -16,8 +16,9 @@
 //! Preset Manager: `presetManager.search`, `presetManager.favoritesOnly`,
 //! `presetManager.item.<name>`, `presetManager.favorite.<name>`, `presetManager.saveName`,
 //! `presetManager.save`, `presetManager.delete`, `presetManager.import`, `presetManager.export`,
-//! `presetManager.ok`, `presetManager.cancel`; Quick Export: `quickExport.path`,
-//! `quickExport.preset.<name>`, `quickExport.go`, `quickExport.close`.
+//! `presetManager.ok`, `presetManager.cancel`; Quick Export: `quickExport.path` (the file name),
+//! `quickExport.location` (the folder; opens the save dialog), `quickExport.preset.<name>`,
+//! `quickExport.go`, `quickExport.close`.
 
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use filmcraft_engine::export::presets::{DEFAULT_PRESET, preset_key};
@@ -358,6 +359,44 @@ fn text(ui: &mut egui::Ui, reg: &mut Reg, id: &str, v: &mut String, hint: &str) 
     reg.add(id, r.rect, hint);
 }
 
+/// A text field over a value the caller fills in again every frame (a file name taken from a path,
+/// a folder that falls back to the default one). While it has focus it shows what is typed, even
+/// when that is not usable yet (emptied to retype, a half-typed path); each non-empty value is
+/// returned as it comes. Leaving shows the stored value again.
+fn draft_text(ui: &mut egui::Ui, reg: &mut Reg, id: &str, stored: &str, hint: &str) -> Option<String> {
+    let draft_id = egui::Id::new(("export-draft", id));
+    let mut v = ui.data(|m| m.get_temp::<String>(draft_id)).unwrap_or_else(|| stored.to_string());
+    let r = ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY));
+    reg.add(id, r.rect, hint);
+    if r.has_focus() {
+        ui.data_mut(|m| m.insert_temp(draft_id, v.clone()));
+    } else {
+        ui.data_mut(|m| m.remove::<String>(draft_id));
+    }
+    (r.changed() && !v.trim().is_empty()).then_some(v)
+}
+
+/// The output folder as a link (folder icon, accent colour, underlined); the caller opens the save
+/// dialog on a click. A path too long for the row loses its start, so the folder's name stays.
+fn location_link(ui: &mut egui::Ui, t: &Tokens, folder: &str) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+    let col = if resp.hovered() { t.accent_hover } else { t.accent };
+    crate::icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 8.0, r.center().y), vec2(14.0, 14.0)), crate::icons::Icon::Folder, col);
+    let room = (r.width() - 22.0).max(0.0);
+    let mut galley = ui.painter().layout_no_wrap(folder.to_string(), Tokens::ui(12.5), col);
+    for (i, _) in folder.char_indices().skip(1) {
+        if galley.size().x <= room {
+            break;
+        }
+        galley = ui.painter().layout_no_wrap(format!("…{}", folder.get(i..).unwrap_or("")), Tokens::ui(12.5), col);
+    }
+    let at = pos2(r.min.x + 20.0, r.center().y - galley.size().y / 2.0);
+    let underline = at.y + galley.size().y;
+    ui.painter().hline(at.x..=at.x + galley.size().x, underline, egui::Stroke::new(1.0, col));
+    ui.painter().galley(at, galley, col);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(folder)
+}
+
 const RATES: [(&str, FrameRate); 11] = [
     ("10", FrameRate { num: 10, den: 1 }),
     ("12", FrameRate { num: 12, den: 1 }),
@@ -403,12 +442,18 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     egui::ScrollArea::vertical().id_salt("export-settings-scroll").auto_shrink([false, false]).show(&mut child, |ui| {
         ui.label(egui::RichText::new(tl!("Media File")).strong().size(14.0));
         ui.add_space(6.0);
-        row(ui, &t, tl!("File Name"), |ui| text(ui, &mut reg, "export.fileName", &mut ex.file_name, tl!("Sequence name")));
+        row(ui, &t, tl!("File Name"), |ui| {
+            if let Some(v) = draft_text(ui, &mut reg, "export.fileName", &ex.file_name, tl!("Sequence name")) {
+                ex.file_name = v;
+            }
+        });
         row(ui, &t, tl!("Location"), |ui| {
             let r = ui.small_button("…");
             reg.add("export.location.browse", r.rect, "Choose folder");
             pick_folder = r.clicked();
-            text(ui, &mut reg, "export.location", &mut ex.location, tl!("Folder"));
+            if let Some(v) = draft_text(ui, &mut reg, "export.location", &ex.location, tl!("Folder")) {
+                ex.location = v;
+            }
         });
         // Preset: favourites, then every preset by category, then More presets…
         row(ui, &t, tl!("Preset"), |ui| {
@@ -1244,6 +1289,30 @@ fn quick_presets(app: &FilmcraftApp) -> Vec<String> {
     v
 }
 
+/// The Quick Export path for the preset's extension `ext`, or None when `path` already fits. No
+/// folder means the default one and no file name the sequence's; another format's extension is
+/// swapped and any other kept, so a typed or chosen name survives a preset change.
+fn quick_file(app: &FilmcraftApp, path: &str, seq_name: &str, ext: &str) -> Option<String> {
+    let p = std::path::Path::new(path);
+    let folder = path.ends_with(['/', '\\']);
+    let dir = if folder { Some(p) } else { p.parent() }.filter(|d| !d.as_os_str().is_empty());
+    let name = if folder { None } else { p.file_name().and_then(|n| n.to_str()) }.filter(|n| !n.trim().is_empty());
+    let cur = name.and_then(|n| std::path::Path::new(n).extension()).and_then(|e| e.to_str()).unwrap_or("");
+    if dir.is_some() && name.is_some() && cur.eq_ignore_ascii_case(ext) {
+        return None;
+    }
+    let file = match name {
+        None => format!("{seq_name}.{ext}"),
+        Some(n) if cur.eq_ignore_ascii_case(ext) => n.to_string(),
+        Some(n) if !cur.is_empty() && app.session.export_presets.all().iter().any(|x| x.settings.extension().eq_ignore_ascii_case(cur)) => {
+            std::path::Path::new(n).with_extension(ext).to_string_lossy().to_string()
+        }
+        Some(n) => format!("{n}.{ext}"),
+    };
+    let dir = dir.map(std::path::Path::to_path_buf).unwrap_or_else(|| filmcraft_engine::export_tools::default_export_dir(&app.session));
+    Some(dir.join(file).to_string_lossy().to_string())
+}
+
 /// The Quick Export popup under the header button at `anchor`.
 pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::Pos2) {
     if !app.ui.export.quick_open {
@@ -1260,14 +1329,14 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
     }
     let preset = app.session.export_presets.find(&app.ui.export.quick_preset);
     let ext = preset.as_ref().map(|p| p.settings.extension()).unwrap_or("mp4");
-    if app.ui.export.quick_path.is_empty() || !app.ui.export.quick_path.ends_with(&format!(".{ext}")) {
-        let name = app.session.project.item(seq).map(|i| i.name.clone()).unwrap_or_else(|| "Sequence".into());
-        let dir = match app.ui.export.quick_path.rsplit_once(['/', '\\']) {
-            Some((d, _)) if !d.is_empty() => d.to_string(),
-            _ => filmcraft_engine::export_tools::default_export_dir(&app.session).to_string_lossy().to_string(),
-        };
-        app.ui.export.quick_path = std::path::Path::new(&dir).join(format!("{name}.{ext}")).to_string_lossy().to_string();
+    let format = preset.as_ref().map(|p| p.settings.format.label()).unwrap_or("MP4");
+    let seq_name = app.session.project.item(seq).map(|i| i.name.clone()).unwrap_or_else(|| "Sequence".into());
+    if let Some(p) = quick_file(app, &app.ui.export.quick_path, &seq_name, ext) {
+        app.ui.export.quick_path = p;
     }
+    let path = std::path::Path::new(&app.ui.export.quick_path);
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let folder = path.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
     let est = app
         .session
         .execute("export.resolve", json!({"preset": app.ui.export.quick_preset}))
@@ -1277,6 +1346,8 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
     let mut reg = Reg::default();
     let mut go = false;
     let mut close = false;
+    let mut browse = false;
+    let mut typed: Option<String> = None;
     let q = &mut app.ui.export;
     let area = egui::Area::new(egui::Id::new("quick-export")).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -1290,8 +1361,10 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
                 });
             });
             ui.label(egui::RichText::new(tl!("File Name & Location")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut q.quick_path).desired_width(f32::INFINITY));
-            reg.add("quickExport.path", r.rect, "File Name & Location");
+            typed = draft_text(ui, &mut reg, "quickExport.path", &file_name, tl!("File Name"));
+            let r = location_link(ui, &t, &folder);
+            reg.add("quickExport.location", r.rect, folder.clone());
+            browse = r.clicked();
             ui.add_space(4.0);
             ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim).size(11.5));
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
@@ -1318,6 +1391,13 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
     // the header click that opened the popup is not a click elsewhere
     let toggled = ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("quick-export-toggled")).unwrap_or(false));
     reg.flush(app);
+    if let Some(v) = typed {
+        // a file name goes in the shown folder; a typed or pasted path replaces both
+        app.ui.export.quick_path = if v.contains(['/', '\\']) { v } else { std::path::Path::new(&folder).join(v.trim()).to_string_lossy().to_string() };
+    }
+    if browse && let Some(p) = app.hooks.pick_save_as.as_mut().and_then(|f| f(format, &[ext], &app.ui.export.quick_path)) {
+        app.ui.export.quick_path = p;
+    }
     if go {
         let p = json!({"preset": app.ui.export.quick_preset, "path": app.ui.export.quick_path});
         match app.session.execute("export.quick", p) {
