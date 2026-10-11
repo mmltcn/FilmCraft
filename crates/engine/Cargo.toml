@@ -46,4 +46,5 @@ web-time = "1"
 
 [dev-dependencies]
 filmcraft-testkit = { workspace = true }
+filmcraft-isobmff = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
