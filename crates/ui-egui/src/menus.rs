@@ -35,6 +35,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("app.language.german", "Deutsch", ["Edit", "Language"], None),
     uic!("app.language.russian", "Русский", ["Edit", "Language"], None),
     uic!("app.language.french", "Français", ["Edit", "Language"], None),
+    #[cfg(not(target_arch = "wasm32"))]
+    uic!("app.language.traditionalChinese", "繁體中文（台灣）", ["Edit", "Language"], None),
+    #[cfg(not(target_arch = "wasm32"))]
+    uic!("app.language.korean", "한국어", ["Edit", "Language"], None),
     uic!("source.playback.toggle", "Source Play/Stop", [], None),
     uic!("source.playback.play", "Play Source", [], None),
     uic!("source.playback.stop", "Stop Source", [], None),
@@ -190,6 +194,8 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             | "app.language.german"
             | "app.language.russian"
             | "app.language.french"
+            | "app.language.traditionalChinese"
+            | "app.language.korean"
     ) {
         // Japanese needs the craft-fonts (built with CRAFT_FONTS_DIR) or a font installed on the system
         if id == "app.language.japanese" && !crate::i18n::install_japanese_font(ctx) {
@@ -208,8 +214,18 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             "app.language.german" => crate::i18n::Language::De,
             "app.language.russian" => crate::i18n::Language::Ru,
             "app.language.french" => crate::i18n::Language::Fr,
+            "app.language.traditionalChinese" => crate::i18n::Language::ZhTw,
+            "app.language.korean" => crate::i18n::Language::Ko,
             _ => crate::i18n::Language::En,
         };
+        if matches!(language, crate::i18n::Language::ZhTw | crate::i18n::Language::Ko) {
+            if cfg!(target_arch = "wasm32") {
+                return Err("this interface language is available in native builds".into());
+            }
+            if !crate::theme::install_fonts(ctx, language) {
+                return Err(crate::i18n::fmt(language.tr("No font supporting {language} is available."), &[("language", language.name())]));
+            }
+        }
         // The preference is updated in memory before it is written, so a failed write (read-only
         // or full disk) still switches the interface; it only can't be remembered for next time.
         let saved = app.session.execute("prefs.set", json!({"key": "general.interfaceLanguage", "value": language.code()}));
@@ -636,6 +652,8 @@ pub fn menu_items(app: &FilmcraftApp) -> Vec<MenuItem> {
             "app.language.german" => it.checked = Some(app.ui.language == crate::i18n::Language::De),
             "app.language.russian" => it.checked = Some(app.ui.language == crate::i18n::Language::Ru),
             "app.language.french" => it.checked = Some(app.ui.language == crate::i18n::Language::Fr),
+            "app.language.traditionalChinese" => it.checked = Some(app.ui.language == crate::i18n::Language::ZhTw),
+            "app.language.korean" => it.checked = Some(app.ui.language == crate::i18n::Language::Ko),
             _ => {}
         }
         if it.id.starts_with("view.") {

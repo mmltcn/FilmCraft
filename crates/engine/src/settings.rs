@@ -34,7 +34,7 @@ pub const PREFS_VERSION: u32 = 2;
 #[serde(rename_all = "camelCase", default)]
 pub struct GeneralPrefs {
     /// Interface language (persisted independently of projects): `en`, `ja`, `es`, `pt-br`, `uk`,
-    /// `zh-cn`, `de`, `ru`, `fr`, or `system` (the default: the operating system's preferred language when the
+    /// `zh-cn`, `de`, `ru`, `fr`, `zh-tw`, `ko`, or `system` (the default: the operating system's preferred language when the
     /// interface has it, otherwise English).
     pub interface_language: String,
     /// "At Startup": `showHome` (FilmCraft: the demo project), `openMostRecent`, `emptyProject`.
@@ -777,6 +777,10 @@ static CATEGORIES: &[Category] = &[
                     ("de", "Deutsch"),
                     ("ru", "Русский"),
                     ("fr", "Français"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("zh-tw", "繁體中文（台灣）"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("ko", "한국어"),
                 ]),
                 true,
             ),

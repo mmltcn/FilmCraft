@@ -417,6 +417,13 @@ pub fn font_families() -> Vec<FontFamily> {
 /// Install the Latin UI fonts, Chinese fallback (craft-fonts or an installed face), Japanese
 /// craft-fonts and egui visuals. Document names keep their glyphs in every interface language.
 pub fn install(ctx: &egui::Context, t: &Tokens) {
+    install_fonts(ctx, crate::i18n::current());
+    apply_visuals(ctx, t);
+}
+
+/// Install the same theme families with a script-appropriate interface fallback. A failed
+/// language switch keeps the previous definitions instead of displaying missing-glyph boxes.
+pub(crate) fn install_fonts(ctx: &egui::Context, language: crate::i18n::Language) -> bool {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("inter".into(), Arc::new(FontData::from_static(filmcraft_text::fonts::INTER_REGULAR)));
     fonts.font_data.insert("inter-medium".into(), Arc::new(FontData::from_static(filmcraft_text::fonts::INTER_MEDIUM)));
@@ -430,8 +437,12 @@ pub fn install(ctx: &egui::Context, t: &Tokens) {
     // glyph forms; Chinese faces still cover the hanzi Japanese fonts lack
     add_craft_fonts(&mut fonts);
     crate::cjk::install(&mut fonts);
+    crate::cjk::install_language_names(&mut fonts);
+    if !crate::cjk::install_interface(&mut fonts, language) {
+        return false;
+    }
     ctx.set_fonts(fonts);
-    apply_visuals(ctx, t);
+    true
 }
 
 /// Name of the egui font for a craft-fonts entry.
@@ -644,7 +655,10 @@ mod tests {
             let defs = fonts.definitions().clone();
             for (family, stack) in &defs.families {
                 let first = stack.iter().position(|n| n.starts_with("craft:")).unwrap_or(stack.len());
-                assert!(first > 0 && stack[first..].iter().all(|n| n.starts_with("craft:")), "{family:?}: {stack:?}");
+                assert!(
+                    first > 0 && stack[first..].iter().all(|n| n.starts_with("craft:") || n.starts_with("interface-") || n.starts_with("system-")),
+                    "{family:?}: {stack:?}"
+                );
                 let first_japanese = stack.iter().find(|n| n.starts_with("craft:BIZ") || n.starts_with("craft:Shippori"));
                 assert!(first_japanese.is_some_and(|n| n.starts_with("craft:BIZ UDPGothic")), "{family:?}: {stack:?}");
             }
@@ -677,5 +691,37 @@ mod tests {
                 assert!(defs.families.values().flatten().all(|name| !name.starts_with("craft:")));
             }
         });
+    }
+
+    #[test]
+    fn selected_cjk_languages_render_after_theme_changes() {
+        use crate::i18n::{Language, set_current};
+        let ctx = egui::Context::default();
+        for language in [Language::ZhTw, Language::Ko] {
+            let sample = crate::cjk::interface_sample(language).unwrap();
+            if !install_fonts(&ctx, language) {
+                eprintln!("SKIPPED: no interface font for {}", language.code());
+                continue;
+            }
+            set_current(language);
+            for kind in [ThemeKind::Dark, ThemeKind::Medium, ThemeKind::Light] {
+                install(&ctx, &Tokens::for_kind(kind));
+                ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+                ctx.fonts_mut(|fonts| {
+                    for family in font_families() {
+                        let font = FontId::new(13.0, family);
+                        let missing = fonts.layout_no_wrap("\u{fffd}".into(), font.clone(), Color32::WHITE);
+                        let missing_uv = missing.rows[0].glyphs[0].uv_rect;
+                        let text = fonts.layout_no_wrap(sample.into(), font.clone(), Color32::WHITE);
+                        for glyph in text.rows.iter().flat_map(|row| &row.glyphs) {
+                            assert!(!glyph.uv_rect.is_nothing(), "empty {} in {font:?}", glyph.chr);
+                            assert_ne!(glyph.uv_rect, missing_uv, "missing {} in {language:?} / {kind:?} / {font:?}", glyph.chr);
+                        }
+                    }
+                });
+            }
+        }
+        set_current(Language::En);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
     }
 }
