@@ -256,6 +256,10 @@ fn schema_command_describes_every_category() {
     assert_eq!(auto["wired"], true);
     assert!(auto["kind"]["choices"].as_array().unwrap().iter().any(|c| c["value"] == "smoothScroll"));
 
+    // `file.open` restores the saved tabs and views with this on (#928)
+    let restore = tl["fields"].as_array().unwrap().iter().find(|f| f["key"] == "timeline.restoreOpenSequences").unwrap();
+    assert_eq!((restore["wired"].clone(), restore["value"].clone()), (json!(true), json!(true)));
+
     // This option is stored, but Insert/Overwrite does not yet implement focus transfer.
     let focus = tl["fields"].as_array().unwrap().iter().find(|f| f["key"] == "timeline.focusTimelineOnEdit").unwrap();
     assert_eq!(focus["kind"], json!({"type": "bool"}));
