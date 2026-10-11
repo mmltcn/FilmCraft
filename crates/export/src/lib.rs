@@ -1671,6 +1671,19 @@ pub fn frame_span(rate: FrameRate, range: TimeRange) -> (i64, i64) {
     (f0, f1.max(f0))
 }
 
+/// The delay of the `i`th GIF frame (from the start of the export) in centiseconds, the unit GIF
+/// stores. Each frame runs from its rounded start time to the next frame's, so the delays add up
+/// to the exact duration (24 fps: 4, 4, 5, 4, 4, 4 cs …) instead of every frame truncating
+/// 4.17 cs to 4 cs and the animation playing 4 % fast (#854).
+fn gif_delay_cs(rate: FrameRate, i: i64) -> u16 {
+    let num = i128::from(rate.num.max(1));
+    let den = i128::from(rate.den.max(0));
+    // start of frame `k` in centiseconds, rounded half up
+    let at = |k: i64| i128::from(k.max(0)).saturating_mul(200).saturating_mul(den).saturating_add(num) / num.saturating_mul(2);
+    let cs = at(i.saturating_add(1)).saturating_sub(at(i));
+    u16::try_from(cs.clamp(0, i128::from(u16::MAX))).unwrap_or(u16::MAX)
+}
+
 /// An in-memory writer that stays reachable after the encoder that owns a clone is dropped.
 #[derive(Clone, Default)]
 struct SharedBuf(Arc<Mutex<Vec<u8>>>);
@@ -1809,7 +1822,6 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
             } else {
                 None
             };
-            let delay = image::Delay::from_numer_denom_ms((1000 * pipe.rate.den) as u32, pipe.rate.num as u32);
             let mut f = f0;
             while f < f1 {
                 if cancelled() {
@@ -1818,8 +1830,9 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
                 let end = (f + batch).min(f1);
                 if let Some(enc) = gif.as_mut() {
                     let frames: Vec<Vec<u8>> = (f..end).into_par_iter().map(|fi| pipe.frame(fi, sources).0).collect();
-                    for rgba in frames {
+                    for (fi, rgba) in (f..end).zip(frames) {
                         let img = image::RgbaImage::from_raw(w, h, rgba).ok_or_else(|| ExportError::Encode("frame".into()))?;
+                        let delay = image::Delay::from_numer_denom_ms(u32::from(gif_delay_cs(pipe.rate, fi - f0)) * 10, 1);
                         enc.encode_frame(image::Frame::from_parts(img, 0, 0, delay)).map_err(|e| ExportError::Encode(e.to_string()))?;
                     }
                 } else {
