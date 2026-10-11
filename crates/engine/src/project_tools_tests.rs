@@ -445,6 +445,32 @@ fn automate_to_sequence_places_clips_with_overlap_and_transitions() {
     assert!(!s.is_enabled("clip.automateToSequence"));
 }
 
+/// Issue #916: overlap is clamped to half of each clip for placement, but the Cross Dissolve
+/// used the unclamped `overlapFrames` and started before the first clip.
+#[test]
+fn automate_to_sequence_clamps_transition_to_overlap() {
+    let mut s = demo();
+    s.execute("file.newSequence", json!({"name": "Auto", "fps": 23.976})).unwrap();
+    let rate = s.sequence_rate();
+    let names = ["Misty_Forest.mp4", "Ocean_Sunset.mp4"];
+    let ids: Vec<ItemId> = names.iter().map(|n| item_named(&s, n)).collect();
+    for id in &ids {
+        s.execute("project.setMarks", json!({"item": id.0, "in": 0, "out": rate.tick_of(19).0})).unwrap();
+    }
+    s.execute("project.select", json!({"items": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
+    s.execute("clip.automateToSequence", json!({"ordering": "selection", "method": "overwrite", "overlapFrames": 30})).unwrap();
+    let q = s.active_sequence().unwrap();
+    let v = &q.video_tracks[0];
+    assert_eq!(v.items.len(), 2);
+    assert_eq!(v.items[0].start, Tick::ZERO);
+    assert_eq!(v.items[1].start, rate.tick_of(10), "overlap clamped to half of a 20-frame clip");
+    assert_eq!(v.transitions.len(), 1);
+    let t = &v.transitions[0];
+    assert_eq!(t.duration, rate.tick_of(10), "dissolve matches clamped overlap, not 30");
+    assert!(t.start >= v.items[0].start, "dissolve must not start before the first clip: {t:?}");
+    assert!(t.end() <= v.items[1].end(), "dissolve must not end after the second clip: {t:?}");
+}
+
 #[test]
 fn system_report_lists_the_build() {
     let s = &mut Session::default();

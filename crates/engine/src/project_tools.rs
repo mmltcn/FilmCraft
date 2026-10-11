@@ -1171,7 +1171,8 @@ fn automate_to_sequence(s: &mut Session, p: &Value) -> Result<Value> {
         let d = rate.tick_of(rate.frame_at(r.duration + Tick(fd.0 / 2)).max(1));
         plan.push((*id, TimeRange::new(r.start, d)));
     }
-    // destinations
+    // destinations. `cut_overlap[k]` is the overlap between clip k and k+1 (placement-clamped).
+    let mut cut_overlap: Vec<Tick> = Vec::new();
     let starts: Vec<Tick> = if placement == "unnumberedMarkers" {
         let mut m: Vec<Tick> = q.markers.iter().filter(|m| m.name.is_empty() && m.kind == MarkerKind::Comment).map(|m| rate.snap(m.start)).collect();
         m.sort();
@@ -1189,6 +1190,7 @@ fn automate_to_sequence(s: &mut Session, p: &Value) -> Result<Value> {
             if k > 0 {
                 let prev = plan[k - 1].1.duration;
                 let ov = overlap.min(Tick(prev.0 / 2)).min(Tick(r.duration.0 / 2));
+                cut_overlap.push(ov);
                 at -= rate.snap(ov);
             }
             v.push(at);
@@ -1239,20 +1241,23 @@ fn automate_to_sequence(s: &mut Session, p: &Value) -> Result<Value> {
     let mut transitions = 0;
     if placement == "sequentially" && (vt || at) {
         let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
+        let default_frames = s.project.settings.default_transition_duration_frames;
         let mut edges = Vec::new();
-        for (_, ids) in placed.iter().skip(1) {
+        for ((_, ids), ov) in placed.iter().skip(1).zip(cut_overlap.iter().chain(std::iter::repeat(&overlap))) {
+            let frames = if *ov > Tick::ZERO { rate.frame_at(*ov) } else { default_frames };
             for c in ids {
                 let Some((tid, _)) = q.find_item(*c) else { continue };
                 let kind = q.track(tid).map(|t| t.kind);
-                if (kind == Some(TrackKind::Video) && vt) || (kind == Some(TrackKind::Audio) && at) {
-                    edges.push((*c, kind == Some(TrackKind::Video)));
-                }
+                let cmd = match kind {
+                    Some(TrackKind::Video) if vt => "sequence.applyVideoTransition",
+                    Some(TrackKind::Audio) if at => "sequence.applyAudioTransition",
+                    _ => continue,
+                };
+                edges.push((cmd, *c, frames));
             }
         }
-        let frames = if overlap > Tick::ZERO { rate.frame_at(overlap) } else { s.project.settings.default_transition_duration_frames };
-        for (c, video) in edges {
-            let id = if video { "sequence.applyVideoTransition" } else { "sequence.applyAudioTransition" };
-            if s.execute(id, json!({"clip": c.0, "edge": "in", "frames": frames})).is_ok() {
+        for (cmd, c, frames) in edges {
+            if s.execute(cmd, json!({"clip": c.0, "edge": "in", "frames": frames})).is_ok() {
                 transitions += 1;
             }
         }
