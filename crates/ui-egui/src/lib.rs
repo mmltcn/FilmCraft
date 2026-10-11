@@ -1349,6 +1349,12 @@ impl FilmcraftApp {
         if ctx.egui_wants_keyboard_input() || self.dialog == Some(Dialog::Shortcuts) {
             return;
         }
+        // A focused text field takes every unmodified key, including the ones our shortest
+        // shortcuts use, so an input method can compose there (Vietnamese Telex, Korean, …; #243).
+        // `egui_wants_keyboard_input` above is not enough: it is read before this pass lays the UI
+        // out, so it still reports the previous pass, and it is true for any focused widget, which
+        // would leave the editor without its single-key tool shortcuts while a slider has focus.
+        let text_focused = ctx.text_edit_focused();
         // Esc cancels a dynamic trim in progress
         if self.session.trim_play.dynamic.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = self.session.execute("trim.cancelDynamic", json!({}));
@@ -1391,6 +1397,13 @@ impl FilmcraftApp {
             let mut candidates: Vec<&menus::KeyBinding> = panel.chain(app_wide).collect();
             candidates.sort_by_key(|b| std::cmp::Reverse(menus::specificity(b.0)));
             for (m, k, id, _) in candidates {
+                // With a text field focused, an unmodified key belongs to the field (and to the input
+                // method composing in it), not to a tool shortcut: `J`, `Z`, `R`, `A`… are the keys
+                // Vietnamese Telex combines into diacritics (#243). Chords with a modifier stay:
+                // Ctrl+S and friends are not something a text field or an IME consumes.
+                if lets_text_field_keep(*m, text_focused) {
+                    continue;
+                }
                 if i.consume_key(*m, *k) {
                     fire.push(id.clone());
                 }
@@ -2262,6 +2275,60 @@ mod audio_recovery_tests {
         assert_eq!(app.session.playhead(), displayed);
         assert!(app.ui.status.contains("Audio output failed"));
         app.stop();
+    }
+}
+
+/// Whether a shortcut chord must be left alone because a text field is focused.
+///
+/// A focused text field owns every unmodified key: an input method composes there from plain
+/// letters (Vietnamese Telex builds `á` from `a` + `s`, `ả` from `a` + `r`, `ạ` from `a` + `j`),
+/// and our single-key tool shortcuts would swallow them before the field sees them (#243). Chords
+/// with a modifier are not what a text field or an IME consumes, so they keep working.
+fn lets_text_field_keep(modifiers: egui::Modifiers, text_focused: bool) -> bool {
+    text_focused && menus::specificity(modifiers) == 0
+}
+
+#[cfg(test)]
+mod text_focus_shortcut_tests {
+    use super::lets_text_field_keep;
+    use egui::{Key, Modifiers};
+
+    /// Vietnamese Telex composes diacritics from unmodified letters (`a` + `s` → `á`, `a` + `r` →
+    /// `ả`, `a` + `j` → `ạ`), and the editor binds `J`, `Z`, `R`, `A`, `C`, `T`, `K`, `L`, `B`, `N`,
+    /// `P`, `V`, `Y`, `U`, `H` as single-key tool shortcuts. While a text field is focused those
+    /// keys must reach the field, or no diacritic can ever be typed (#243).
+    #[test]
+    fn an_unmodified_key_reaches_a_focused_text_field() {
+        assert!(lets_text_field_keep(Modifiers::NONE, true), "the IME needs the plain letter keys");
+    }
+
+    /// Without a text field the editor keeps its single-key tool shortcuts.
+    #[test]
+    fn an_unmodified_key_still_fires_without_a_text_field() {
+        assert!(!lets_text_field_keep(Modifiers::NONE, false));
+    }
+
+    /// A modifier chord is not what a text field or an IME consumes, so it keeps firing either way.
+    #[test]
+    fn a_modified_chord_still_fires_while_text_is_focused() {
+        for m in [Modifiers::COMMAND, Modifiers::CTRL, Modifiers::SHIFT, Modifiers::ALT, Modifiers::COMMAND | Modifiers::SHIFT] {
+            assert!(!lets_text_field_keep(m, true), "{m:?} is not an IME key");
+        }
+    }
+
+    /// The keys a Vietnamese Telex IME needs must be exactly the ones we now hand to the field.
+    #[test]
+    fn the_telex_trigger_keys_are_left_to_the_field() {
+        // s=acute, f=grave, r=hook above, x=tilde, j=dot below, w=horn, z=remove diacritic
+        for key in [Key::S, Key::F, Key::R, Key::X, Key::J, Key::W, Key::Z] {
+            assert!(lets_text_field_keep(Modifiers::NONE, true), "{key:?} must reach the IME");
+        }
+        // The letters the editor binds as tools are the ones Telex composes with, so they must be
+        // left to the field too: `A` (Track Select Forward), `R` (Rate Stretch), `J` (Shuttle Left),
+        // `Z` (Zoom), `C` (Razor), `T` (Type).
+        for key in [Key::A, Key::R, Key::J, Key::Z, Key::C, Key::T] {
+            assert!(lets_text_field_keep(Modifiers::NONE, true), "{key:?} is a Telex key the tools stole");
+        }
     }
 }
 
