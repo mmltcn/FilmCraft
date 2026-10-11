@@ -203,6 +203,41 @@ fn openexr_sequences() {
     }
 }
 
+/// Compressed OpenEXR sequences (#874): the export setting reaches every still, which shrinks
+/// and (ffmpeg as the external oracle) decodes to the same pixels as the uncompressed file.
+#[test]
+fn openexr_sequences_compress() {
+    let (p, seq, m) = matte([0.2, 0.6, 1.0, 0.5], 64, 36, None);
+    let mut files = Vec::new();
+    for c in ExrCompression::ALL {
+        let dir = Scratch::new(&format!("seq-exr-{c:?}"));
+        let mut s = ExportSettings { format: Format::ExrSequence, path: dir.path("c.exr"), alpha: true, exr_compression: c, ..Default::default() };
+        s.range = Some(TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(1)));
+        export(&p, seq, &s, &m, &Progress::default()).unwrap();
+        let path = dir.0.join("c000.exr");
+        let bytes = std::fs::read(&path).unwrap();
+        let at = bytes.windows(24).position(|w| w == b"compression\0compression\0").unwrap() + 28;
+        assert_eq!(bytes[at], [0, 1, 2, 3][files.len()], "{c:?}");
+        files.push((c, path, bytes.len(), dir));
+    }
+    let plain = files[0].2;
+    for (c, _, len, _) in &files[1..] {
+        assert!(*len < plain / 2, "{c:?}: {len} bytes vs {plain} uncompressed");
+    }
+    let Some(ffmpeg) = filmcraft_testkit::ffmpeg_or_skip("compressed OpenEXR sequences") else { return };
+    let decode = |path: &Path| {
+        let out =
+            std::process::Command::new(&ffmpeg).args(["-v", "error", "-i"]).arg(path).args(["-f", "rawvideo", "-pix_fmt", "gbrapf32le", "-"]).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        out.stdout
+    };
+    let want = decode(&files[0].1);
+    assert_eq!(want.len(), 64 * 36 * 16);
+    for (c, path, _, _) in &files[1..] {
+        assert!(decode(path) == want, "{c:?} decodes differently");
+    }
+}
+
 /// `alpha` keeps straight alpha in PNG and TIFF sequences; off (the default) flattens over black (#160).
 #[test]
 fn image_sequences_keep_alpha_when_asked() {

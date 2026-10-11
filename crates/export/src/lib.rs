@@ -17,6 +17,7 @@ use std::io::Write;
 
 mod aac_out;
 mod audio_out;
+mod deflate;
 mod job;
 mod mxf_out;
 mod pace;
@@ -339,6 +340,9 @@ pub struct ExportSettings {
     /// Other formats ignore it.
     #[serde(default)]
     pub alpha: bool,
+    /// Compression of OpenEXR sequences (uncompressed unless set); other formats ignore it.
+    #[serde(default)]
+    pub exr_compression: ExrCompression,
     /// Output frame size (None = Match Source: the sequence size times `scale`).
     pub frame_size: Option<(u32, u32)>,
     /// Output frame rate (None = Match Source).
@@ -546,6 +550,7 @@ impl Default for ExportSettings {
             mxf_video_codec: MxfVideoCodec::default(),
             sdr: false,
             alpha: false,
+            exr_compression: ExrCompression::None,
             frame_size: None,
             frame_rate: None,
             scaling: Scaling::default(),
@@ -1700,6 +1705,11 @@ pub fn encode_still(format: Format, rgba: Vec<u8>, w: u32, h: u32, alpha: bool) 
 
 /// [`encode_still`] with the JPEG quality (1–100; ignored by the lossless formats).
 pub fn encode_still_with_quality(format: Format, rgba: Vec<u8>, w: u32, h: u32, alpha: bool, quality: u8) -> Result<Vec<u8>> {
+    encode_still_with(format, rgba, w, h, alpha, quality, ExrCompression::None)
+}
+
+/// [`encode_still_with_quality`] with the OpenEXR compression (ignored by the other formats).
+pub fn encode_still_with(format: Format, rgba: Vec<u8>, w: u32, h: u32, alpha: bool, quality: u8, exr: ExrCompression) -> Result<Vec<u8>> {
     let enc = |e: image::ImageError| ExportError::Encode(e.to_string());
     let mut out = std::io::Cursor::new(Vec::new());
     match format {
@@ -1716,7 +1726,7 @@ pub fn encode_still_with_quality(format: Format, rgba: Vec<u8>, w: u32, h: u32, 
         }
         Format::TgaSequence => return raster::tga(&rgba, w, h, alpha),
         Format::DpxSequence => return raster::dpx(&rgba, w, h),
-        Format::ExrSequence => return raster::exr(&rgba, w, h, alpha),
+        Format::ExrSequence => return raster::exr(&rgba, w, h, alpha, exr),
         Format::PngSequence => {
             image::ImageEncoder::write_image(image::codecs::png::PngEncoder::new(&mut out), &rgba, w, h, image::ExtendedColorType::Rgba8).map_err(enc)?
         }
@@ -1826,7 +1836,15 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
                     let written: Vec<Result<u64>> = (f..end)
                         .into_par_iter()
                         .map(|fi| {
-                            let data = encode_still_with_quality(settings.format, pipe.frame(fi, sources).0, w, h, settings.alpha, settings.quality)?;
+                            let data = encode_still_with(
+                                settings.format,
+                                pipe.frame(fi, sources).0,
+                                w,
+                                h,
+                                settings.alpha,
+                                settings.quality,
+                                settings.exr_compression,
+                            )?;
                             write_output(settings, &pcm::image_sequence_path(&settings.path, (fi - f0) as u64, count), data)
                         })
                         .collect();

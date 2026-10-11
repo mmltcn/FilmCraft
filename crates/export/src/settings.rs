@@ -160,6 +160,46 @@ impl MxfVideoCodec {
     }
 }
 
+/// Compression of OpenEXR stills (the file's `compression` attribute). Every mode is lossless.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExrCompression {
+    /// Uncompressed.
+    #[default]
+    None,
+    /// Run-length coded bytes (RLE_COMPRESSION), one scan line per chunk.
+    Rle,
+    /// zlib (deflate) per scan line (ZIPS_COMPRESSION).
+    Zips,
+    /// zlib (deflate) per block of 16 scan lines (ZIP_COMPRESSION).
+    Zip,
+}
+
+impl ExrCompression {
+    pub const ALL: [ExrCompression; 4] = [ExrCompression::None, ExrCompression::Rle, ExrCompression::Zips, ExrCompression::Zip];
+    pub fn label(self) -> &'static str {
+        match self {
+            ExrCompression::None => "None",
+            ExrCompression::Rle => "RLE",
+            ExrCompression::Zips => "ZIP (1 scan line)",
+            ExrCompression::Zip => "ZIP (16 scan lines)",
+        }
+    }
+    /// The value of the OpenEXR `compression` attribute.
+    pub(crate) fn code(self) -> u8 {
+        match self {
+            ExrCompression::None => 0,
+            ExrCompression::Rle => 1,
+            ExrCompression::Zips => 2,
+            ExrCompression::Zip => 3,
+        }
+    }
+    /// Scan lines per chunk.
+    pub(crate) fn lines(self) -> usize {
+        if self == ExrCompression::Zip { 16 } else { 1 }
+    }
+}
+
 /// Audio codec. `Auto` = AAC in MP4 and AAC Audio, PCM in QuickTime / WAV / AIFF.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -490,8 +530,11 @@ impl ExportSettings {
             Format::TgaSequence => px * if self.keeps_alpha() { 4.0 } else { 3.0 } * 8.0 * fps,
             // 10-bit RGB in one 32-bit word per pixel
             Format::DpxSequence => px * 4.0 * 8.0 * fps,
-            // two bytes per half-float channel
-            Format::ExrSequence => px * if self.keeps_alpha() { 8.0 } else { 6.0 } * 8.0 * fps,
+            // two bytes per half-float channel; lossless compression roughly halves it
+            Format::ExrSequence => {
+                let k = if self.exr_compression == ExrCompression::None { 1.0 } else { 0.5 };
+                px * if self.keeps_alpha() { 8.0 } else { 6.0 } * 8.0 * fps * k
+            }
             Format::Gif => px * 0.6 * 8.0 * fps,
             Format::Wav | Format::Aiff | Format::MxfOp1a | Format::MxfOpAtom => 0.0,
         };
@@ -575,7 +618,13 @@ impl ExportSettings {
                 Format::Apv => v += &format!(", {}", crate::apv_profile(&self.apv_profile).name()),
                 Format::Mjpeg | Format::JpegSequence => v += &format!(", quality {}", self.quality),
                 Format::DpxSequence => v += ", 10-bit RGB",
-                Format::ExrSequence => v += ", 16-bit half float, linear",
+                Format::ExrSequence => {
+                    v += ", 16-bit half float, linear";
+                    match self.exr_compression {
+                        ExrCompression::None => v += ", uncompressed",
+                        c => v += &format!(", {} compression", c.label()),
+                    }
+                }
                 _ => {}
             }
             v
