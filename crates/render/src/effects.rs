@@ -87,6 +87,11 @@ pub(crate) fn hash3(x: usize, y: usize, z: u64) -> f32 {
 
 /// Apply one effect. Unknown/unimplemented ids are a no-op (they still round-trip in the project).
 pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let _timing = crate::timing::start(match e.effect.as_str() {
+        "gaussian_blur" | "fast_blur" => crate::timing::Stage::Blur,
+        "lumetri" => crate::timing::Stage::Lumetri,
+        _ => crate::timing::Stage::OtherEffect,
+    });
     if !e.enabled || img.w == 0 || img.h == 0 {
         return;
     }

@@ -123,7 +123,8 @@ fn gpu_export_matches_cpu_and_counts() {
     let sizes = [(320u32, 180u32), (17, 13), (1, 1), (257, 129)];
     for (i, size) in sizes.into_iter().enumerate() {
         export_png("cpu", GpuRendering::Off, size);
-        export_png("gpu", GpuRendering::Auto, size);
+        // The default must reach the registered hardware renderer without an opt-in override.
+        export_png("gpu", GpuRendering::default(), size);
         for f in ["000", "001"] {
             assert_parity(&png("cpu", &format!("img{f}.png")), &png("gpu", &format!("img{f}.png")), &format!("{:?} frame {f}", size));
         }

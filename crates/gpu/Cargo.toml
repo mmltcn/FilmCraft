@@ -16,12 +16,19 @@ filmcraft-geom = { workspace = true }
 filmcraft-project = { workspace = true }
 filmcraft-render = { workspace = true }
 filmcraft-time = { workspace = true }
-wgpu = { version = "30", default-features = false, features = ["wgsl"] }
+# Standalone consumers (notably the CLI) must have backends without relying on
+# feature unification from eframe or this crate's dev-dependencies.
+wgpu = { version = "30", features = ["wgsl"] }
 log = { workspace = true }
 pollster = "0.4"
 rayon = { workspace = true }
 
 [dev-dependencies]
+filmcraft-engine = { workspace = true }
+filmcraft-format = { workspace = true }
+filmcraft-platform = { workspace = true }
+filmcraft-prores = { workspace = true }
+serde_json = { workspace = true }
 pollster = "0.4"
 filmcraft-export = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }

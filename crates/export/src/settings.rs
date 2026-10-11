@@ -81,13 +81,13 @@ pub enum HardwareEncoding {
 /// way. On an effects-heavy edit it exports 2.4× (1080p) to 3.2× (4K) faster, and a single plain
 /// clip takes the same time (`docs/performance.md`). The GPU matches the CPU within the
 /// compositor's parity tolerance, not bit for bit, so an export's bytes can depend on the
-/// machine's GPU. Off = the CPU reference renderer, byte-reproducible everywhere; Off is the
-/// default (opt-in per export) until GPU export has been measured on Windows and macOS.
+/// machine's GPU. Auto is the default for every export; unsupported effects and unavailable
+/// adapters retain the CPU fallback. Off explicitly selects the CPU reference renderer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GpuRendering {
-    Auto,
     #[default]
+    Auto,
     Off,
 }
 

@@ -30,6 +30,7 @@ pub mod plan;
 pub mod preview;
 pub mod remix;
 pub mod scene;
+pub mod timing;
 pub mod track;
 pub mod transitions;
 pub mod vfx;
@@ -236,7 +237,6 @@ pub(crate) fn render_seq_tracks(project: &Project, seq: &Sequence, t: Tick, opts
             }
             let (op, bl) = opacity_blend(item, mt);
             // Adjustment layer opacity (and opacity masks, in sequence pixels) mix adjusted over original.
-            let mut out = canvas.snapshot();
             let mut adj = adjusted;
             adj.scale_alpha(op);
             mask::apply_opacity_masks(&mut adj, item, mt, opts.scale);
@@ -245,8 +245,10 @@ pub(crate) fn render_seq_tracks(project: &Project, seq: &Sequence, t: Tick, opts
                 let cov: Vec<f32> = region.px.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
                 mask::scale_by(&mut adj, &cov);
             }
-            blend::composite(&mut out, &adj, 1.0, bl);
-            canvas.set(out);
+            // The original canvas is already the destination; copying it adds a full-frame
+            // allocation and memory pass without changing the blend.
+            blend::composite(canvas.get(), &adj, 1.0, bl);
+            pool::recycle_f32(adj.px);
             continue;
         }
         match item_layer_ex(project, seq, item, t, opts, sources, &tc, true) {

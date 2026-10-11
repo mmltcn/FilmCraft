@@ -306,10 +306,16 @@ fn hdr_exports_signal_pq_and_hlg() {
     }
 }
 
-/// Scenario runner for the GPU hook: everything in one test because the renderer registry is
-/// process-global and parallel tests would see each other's factories.
+thread_local! {
+    // Auto is the production default. Keep fake renderers out of unrelated concurrent exports;
+    // factories are evaluated on the caller thread before workers receive their renderer pool.
+    static TEST_GPU_HOOK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Scenario runner for the process-global GPU registry, with fake factories scoped to this test.
 #[test]
 fn gpu_hook_scenarios() {
+    TEST_GPU_HOOK.set(true);
     // 1. Declining renderer: byte-equal to Off, and an empty registry too.
     crate::reset_frame_renderers_for_tests();
     crate::register_frame_renderer(|| None);
@@ -318,7 +324,8 @@ fn gpu_hook_scenarios() {
         let mut s = ExportSettings { format: Format::PngSequence, path: path.clone(), ..Default::default() };
         s.range = Some(TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(2)));
         s.gpu_rendering = match gpu {
-            Some(true) | None => crate::GpuRendering::Auto,
+            Some(true) => crate::GpuRendering::Auto,
+            None => crate::GpuRendering::default(),
             Some(false) => crate::GpuRendering::Off,
         };
         export(&p, seq, &s, &m, &Progress::default()).unwrap()
@@ -332,8 +339,8 @@ fn gpu_hook_scenarios() {
 
     // 2. Producing renderer: counters up and its picture reaches the export.
     crate::reset_frame_renderers_for_tests();
-    crate::register_frame_renderer(|| Some(Box::new(FakeRenderer) as Box<dyn FrameRenderer>));
-    mk(&tmp("fake-gpu.png"), Some(true));
+    crate::register_frame_renderer(|| TEST_GPU_HOOK.get().then(|| Box::new(FakeRenderer) as Box<dyn FrameRenderer>));
+    mk(&tmp("fake-gpu.png"), None);
     assert!(gpu_render_stats().frames >= 2, "gpu frames counted: {:?}", gpu_render_stats());
     assert_eq!(gpu_render_stats().fallbacks, 0);
     mk(&tmp("fake-off.png"), Some(false));
@@ -383,7 +390,7 @@ fn gpu_hook_scenarios() {
     //    frame comes from the CPU (byte-equal to Off), and no renderer is used after its panic.
     crate::reset_frame_renderers_for_tests();
     PANICS.store(0, std::sync::atomic::Ordering::SeqCst);
-    crate::register_frame_renderer(|| Some(Box::new(PanickingRenderer) as Box<dyn FrameRenderer>));
+    crate::register_frame_renderer(|| TEST_GPU_HOOK.get().then(|| Box::new(PanickingRenderer) as Box<dyn FrameRenderer>));
     let (p, seq, m) = project();
     let mk12 = |path: &String, gpu: crate::GpuRendering| {
         let mut s = ExportSettings { format: Format::PngSequence, path: path.clone(), ..Default::default() };
@@ -403,15 +410,15 @@ fn gpu_hook_scenarios() {
     // at most one panic per pooled renderer (4): none is used again after it panicked
     assert!(PANICS.load(std::sync::atomic::Ordering::SeqCst) <= 4, "renderer reused after a panic: {}", PANICS.load(std::sync::atomic::Ordering::SeqCst));
 
-    // 5. A frame the planner hands back as one CPU image (an adjustment layer over the clip from
+    // 5. A frame the planner hands back as one CPU image (a partial adjustment over the clip from
     //    frame 12) is rendered by the CPU without taking a pooled renderer: it counts as a
     //    fallback, and the renderer's picture reaches only the frames before it.
     crate::reset_frame_renderers_for_tests();
-    crate::register_frame_renderer(|| Some(Box::new(FakeRenderer) as Box<dyn FrameRenderer>));
+    crate::register_frame_renderer(|| TEST_GPU_HOOK.get().then(|| Box::new(FakeRenderer) as Box<dyn FrameRenderer>));
     let (p, seq, m) = project();
     let mut p = Arc::unwrap_or_clone(p);
     let r = FrameRate::FPS_24;
-    let adj = p.add_item("adj", Label::Iris, ItemKind::AdjustmentLayer { width: 320, height: 180, rate: r, duration: Tick(TICKS_PER_SECOND) }, None);
+    let adj = p.add_item("adj", Label::Iris, ItemKind::AdjustmentLayer { width: 160, height: 180, rate: r, duration: Tick(TICKS_PER_SECOND) }, None);
     let over = p.make_track_item(adj, TrackKind::Video, r.tick_of(12), TimeRange::new(Tick::ZERO, r.tick_of(12)), r).unwrap();
     let v2 = filmcraft_project::TrackId(p.alloc_id());
     let q = p.sequence_mut(seq).unwrap();
@@ -433,6 +440,7 @@ fn gpu_hook_scenarios() {
     }
     assert_eq!((gpu_render_stats().frames, gpu_render_stats().fallbacks), (12, 12), "{:?}", gpu_render_stats());
     crate::reset_frame_renderers_for_tests();
+    TEST_GPU_HOOK.set(false);
 }
 
 static PANICS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

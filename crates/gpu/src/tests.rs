@@ -500,3 +500,136 @@ fn fast_half_float_conversion_matches_the_reference_for_every_value() {
         assert!(fast.to_bits() == slow.to_bits() || (fast.is_nan() && slow.is_nan()), "{h:#06x}: {fast} vs {slow}");
     }
 }
+#[test]
+fn adjustment_export_matches_cpu_with_transparency_and_upper_layers() {
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut c = GpuCompositor::new(&dev, &q);
+    if c.fx.is_none() {
+        eprintln!("SKIPPED (adjustment GPU parity): adapter has no Rgba32Float compute effect stage");
+        return;
+    }
+    let (w, h) = (128usize, 72usize);
+    let preset = filmcraft_render::lumetri_presets::find("Faded Print").unwrap().instance();
+    let cx = filmcraft_render::effects::FxCtx {
+        t: filmcraft_time::Tick::ZERO,
+        px_scale: 1.0,
+        seconds: 0.0,
+        timecode: "",
+        clip_name: "",
+        project: None,
+        env: None,
+        working: filmcraft_color::WorkingSpace::Rec709,
+    };
+    let op = filmcraft_render::gpufx::FxOp::eval(&preset, &cx, w, h).unwrap();
+    assert!(op.gpu_ok());
+    for opacity in [0.0, 0.25, 1.0] {
+        let px = (0..w * h)
+            .flat_map(|i| {
+                let alpha = (i % 7) as f32 / 6.0;
+                [0.2 * alpha, (i % w) as f32 / w as f32 * alpha, 0.6 * alpha, alpha]
+            })
+            .collect();
+        let lower = PlanLayer::new(Arc::new(VideoFrame::rgba_f32(w as u32, h as u32, px)), Affine::IDENTITY, 1.0, Blend::Normal);
+        let upper = PlanLayer::new(Arc::new(VideoFrame::rgba_f32(1, 1, vec![0.1, 0.0, 0.0, 0.2])), Affine::scale(w as f64, h as f64), 0.5, Blend::Normal);
+        let plan = FramePlan::Composite {
+            width: w,
+            height: h,
+            steps: vec![
+                PlanStep::Layers(vec![lower]),
+                PlanStep::Adjustment { ops: vec![op.clone()], opacity },
+                PlanStep::Adjustment { ops: vec![], opacity: 0.35 },
+                PlanStep::Layers(vec![upper]),
+            ],
+        };
+        let expected = execute_cpu(&plan);
+        let (_, _, px) = c.render_export_prepared(&plan, Some(&prepare(&plan))).expect("adjustment export readback");
+        assert_eq!(c.cpu_transitions, 0, "adjustment test must exercise GPU effects");
+        let gpu = filmcraft_render::Image { w, h, px };
+        let (a, b) = (expected.over_black_rgba8(), gpu.over_black_rgba8());
+        let mut diff: Vec<u32> =
+            a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).map(|(a, b)| (0..3).map(|i| a[i].abs_diff(b[i]) as u32).max().unwrap()).collect();
+        diff.sort_unstable();
+        let p99 = diff[diff.len() * 99 / 100];
+        let mean = diff.iter().sum::<u32>() as f64 / diff.len() as f64;
+        assert!(p99 <= 6 && mean < 1.5, "opacity {opacity}: p99 {p99}, mean {mean}");
+        let alpha = expected.px.as_chunks::<4>().0.iter().zip(gpu.px.as_chunks::<4>().0).map(|(a, b)| (a[3] - b[3]).abs()).fold(0.0, f32::max);
+        assert!(alpha < 0.003, "opacity {opacity}: alpha difference {alpha}");
+    }
+}
+
+#[test]
+fn parallel_accumulator_conversion_matches_serial_all_half_codes() {
+    let (width, height) = (256usize, 64usize);
+    for padding in [0usize, 31, 256] {
+        let row = width * 8 + padding;
+        // The final row need not include unused padding.
+        let mut data = vec![0xA5; (height - 1) * row + width * 8];
+        for code in 0..=u16::MAX {
+            let i = code as usize;
+            let byte = i / (width * 4) * row + i % (width * 4) * 2;
+            data[byte..byte + 2].copy_from_slice(&code.to_le_bytes());
+        }
+        let mut output = vec![f32::NAN; width * height * 4];
+        assert!(convert_accumulator_rows(&data, &mut output, width, height, row));
+        for (code, result) in (0..=u16::MAX).zip(output) {
+            assert_eq!(result.to_bits(), f16_to_f32_fast(code).to_bits(), "half {code:04x}, padding {padding}");
+        }
+    }
+}
+
+#[test]
+fn accumulator_conversion_rejects_invalid_layout_before_writing() {
+    let data = [0u8; 64];
+    for (width, height, row, bytes, samples) in [
+        (0, 1, 8, 64, 4),
+        (1, 0, 8, 64, 4),
+        (1, 1, 0, 64, 4),
+        (1, 1, 7, 64, 4),
+        (1, 1, 8, 7, 4),
+        (1, 2, 16, 23, 8),
+        (1, 1, 8, 64, 3),
+        (1, 1, 8, 64, 5),
+        (usize::MAX, 1, 8, 64, 4),
+        (1, usize::MAX, 8, 64, 4),
+        (1, 3, usize::MAX, 64, 12),
+    ] {
+        let mut out = vec![123.5; samples];
+        assert!(!convert_accumulator_rows(&data[..bytes], &mut out, width, height, row));
+        assert!(out.iter().all(|p| *p == 123.5));
+    }
+}
+
+#[test]
+fn composite_frame_retains_all_effect_texture_sizes() {
+    let Some((dev, q)) = device() else {
+        eprintln!("SKIPPED (effect pool retention): no GPU adapter");
+        return;
+    };
+    let mut c = GpuCompositor::new(&dev, &q);
+    if c.fx.is_none() {
+        eprintln!("SKIPPED (effect pool retention): no compute effect stage");
+        return;
+    }
+    let (source_size, output_size) = ((32u32, 24u32), (64u32, 48u32));
+    let frame = Arc::new(VideoFrame::rgba_f32(source_size.0, source_size.1, vec![0.25; (source_size.0 * source_size.1 * 4) as usize]));
+    let mut lower = PlanLayer::new(frame, Affine::scale(2.0, 2.0), 1.0, Blend::Normal);
+    lower.fx = Some(Arc::new(filmcraft_render::plan::LayerFx { size: source_size, decimation: 1, ops: vec![] }));
+    let plan = FramePlan::Composite {
+        width: output_size.0 as usize,
+        height: output_size.1 as usize,
+        steps: vec![PlanStep::Layers(vec![lower]), PlanStep::Adjustment { ops: vec![], opacity: 1.0 }],
+    };
+    for _ in 0..2 {
+        c.render_export_prepared(&plan, Some(&prepare(&plan))).expect("composite readback");
+        assert_eq!(c.cpu_transitions, 0);
+        let fx = c.fx.as_ref().unwrap();
+        assert!(fx.retains_size(source_size), "source-size textures must survive adjustment and final resolve steps");
+        assert!(fx.retains_size(output_size), "adjustment textures must survive the final empty resolve step");
+    }
+    let plain = FramePlan::Layers { width: output_size.0 as usize, height: output_size.1 as usize, layers: vec![] };
+    c.render_export_prepared(&plain, None).expect("plain readback");
+    assert!(c.fx.as_ref().unwrap().is_idle(), "unused sizes are still retired after a complete frame");
+}

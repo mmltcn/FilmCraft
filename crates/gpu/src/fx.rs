@@ -250,8 +250,8 @@ fn steps(op: &FxOp) -> Vec<Step> {
 }
 
 impl FxStage {
-    /// Whether `device` can run the stage: compute shaders with 16×16 workgroups and a storage
-    /// texture (WebGL2-class devices can't; they render effects on the CPU).
+    /// Necessary compute limits: 16×16 workgroups and a storage texture. Format/pipeline
+    /// support is validated by `try_new` (WebGL2-class devices use CPU effects).
     pub(crate) fn supported(device: &wgpu::Device) -> bool {
         let l = device.limits();
         l.max_storage_textures_per_shader_stage >= 1
@@ -261,7 +261,36 @@ impl FxStage {
             && l.max_compute_workgroups_per_dimension >= 1
     }
 
-    pub(crate) fn new(device: &wgpu::Device, composite: &wgpu::ShaderModule, layer_bgl: &wgpu::BindGroupLayout) -> Self {
+    /// This stage is optional: a device can expose compute limits without supporting the
+    /// Rgba32Float render target. Capture pipeline validation locally instead of invoking
+    /// wgpu's uncaptured-error handler (which can panic or retire the shared export device).
+    pub(crate) fn try_new(device: &wgpu::Device, composite: &wgpu::ShaderModule, layer_bgl: &wgpu::BindGroupLayout) -> Option<Self> {
+        if !Self::supported(device) {
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let stage = Self::new(device, composite, layer_bgl);
+            let errors = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop()), pollster::block_on(oom.pop())];
+            let mut failed = false;
+            for error in errors.into_iter().flatten() {
+                log::warn!("GPU effect stage unavailable; effects use CPU fallback: {error}");
+                failed = true;
+            }
+            if failed { None } else { Some(stage) }
+        }
+        // Browser error-scope futures require yielding to the browser event loop; never
+        // block it in this synchronous constructor. Preserve the existing browser path.
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some(Self::new(device, composite, layer_bgl))
+        }
+    }
+
+    fn new(device: &wgpu::Device, composite: &wgpu::ShaderModule, layer_bgl: &wgpu::BindGroupLayout) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filmcraft-fx"),
             source: wgpu::ShaderSource::Wgsl(include_str!("fx.wgsl").into()),
@@ -349,6 +378,11 @@ impl FxStage {
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
         self.pool.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retains_size(&self, size: (u32, u32)) -> bool {
+        self.pool.get(&size).is_some_and(|targets| !targets.is_empty())
     }
 
     fn targets(&mut self, device: &wgpu::Device, size: (u32, u32), n: usize) -> Vec<Target> {

@@ -1982,17 +1982,22 @@ name = "filmcraft-gpu"
 version = "0.6.0"
 dependencies = [
  "filmcraft-color",
+ "filmcraft-engine",
  "filmcraft-export",
+ "filmcraft-format",
  "filmcraft-frame",
  "filmcraft-geom",
  "filmcraft-media",
+ "filmcraft-platform",
  "filmcraft-project",
+ "filmcraft-prores",
  "filmcraft-render",
  "filmcraft-time",
  "image",
  "log",
  "pollster 0.4.0",
  "rayon",
+ "serde_json",
  "wgpu",
 ]
 

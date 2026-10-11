@@ -53,6 +53,7 @@ pub fn input_transform(cs: ColorSpace, range: Range, pipe: &ColorPipeline, peak_
 
 /// Decode a frame of `item` (box-decimated by `n`) into the working space of `pipe`.
 pub fn decode(project: &Project, item: ItemId, frame: &VideoFrame, n: usize, pipe: &ColorPipeline) -> Image {
+    let _timing = crate::timing::start(crate::timing::Stage::SourceConversion);
     let cs = source_space(project, item, frame);
     if !needs_management(pipe, cs, frame) {
         let (w, h, px) = frame.to_linear_f32_decimated(n);

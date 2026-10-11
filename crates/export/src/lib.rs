@@ -363,7 +363,7 @@ pub struct ExportSettings {
     #[serde(default)]
     pub hardware_encoding: HardwareEncoding,
     /// Composite the exported frames on the GPU instead of the CPU reference renderer (Export ▸
-    /// GPU rendering: Auto / Off, Off by default). Off = the CPU reference renderer exactly.
+    /// GPU rendering: Auto / Off, Auto by default). Off = the CPU reference renderer exactly.
     #[serde(default)]
     pub gpu_rendering: GpuRendering,
     /// VBR maximum bitrate (None = 1.5 × target).
@@ -556,7 +556,7 @@ impl Default for ExportSettings {
             bitrate_mode: BitrateMode::default(),
             crf: DEFAULT_CRF,
             hardware_encoding: HardwareEncoding::default(),
-            gpu_rendering: GpuRendering::Off,
+            gpu_rendering: GpuRendering::default(),
             max_bitrate_kbps: None,
             adaptive_bitrate: None,
             keyframe_distance: None,
@@ -1793,6 +1793,7 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
         }
         f if f.is_image_sequence() || f == Format::Gif => {
             let pipe = pipeline::Pipeline::new(project.clone(), seq, settings, false)?;
+            let batch = pipe.render_batch_limit(batch);
             let (f0, f1) = frame_span(pipe.rate, range);
             let count = (f1 - f0) as u64;
             let (w, h) = (pipe.w, pipe.h);

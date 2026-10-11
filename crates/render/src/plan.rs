@@ -6,8 +6,9 @@
 //! clip whose enabled standard effects all have a GPU implementation ([`crate::gpufx`]) carries
 //! them as a [`LayerFx`]: their parameters evaluated at the frame's time, run by the GPU on the
 //! clip's working image before Motion places it, in the CPU's order (effects → Motion → Opacity /
-//! blend). Anything the shaders don't cover yet — other standard effects, masks, adjustment
-//! layers, nested sequences, transitions other than dissolves, dips and Push — is rendered on the CPU
+//! blend). Full-frame unmasked Normal-blend adjustments run over the accumulated lower tracks.
+//! Anything the shaders don't cover yet — other standard effects, masks, partial adjustments,
+//! nested sequences, transitions other than dissolves, dips and Push — is rendered on the CPU
 //! for that layer (or the whole frame) and handed over as a pre-composited image, so the GPU path
 //! is always exact with respect to the CPU reference.
 //!
@@ -79,6 +80,11 @@ pub enum FramePlan {
 #[derive(Clone)]
 pub enum PlanStep {
     Layers(Vec<PlanLayer>),
+    /// Full-frame, unmasked adjustment, composited over its original backdrop.
+    Adjustment {
+        ops: Vec<FxOp>,
+        opacity: f32,
+    },
     /// Inputs are isolated clip canvases; transition result composites Normal over lower tracks.
     Transition {
         inputs: [Vec<PlanLayer>; 2],
@@ -131,6 +137,7 @@ impl FramePlan {
                 .iter()
                 .map(|s| match s {
                     PlanStep::Layers(ls) => layers(ls),
+                    PlanStep::Adjustment { .. } => 0,
                     PlanStep::Transition { inputs, .. } => inputs.iter().map(|ls| layers(ls)).sum(),
                 })
                 .sum(),
@@ -147,6 +154,7 @@ impl FramePlan {
                 .iter()
                 .map(|s| match s {
                     PlanStep::Layers(ls) => layer_side(ls),
+                    PlanStep::Adjustment { .. } => 0,
                     PlanStep::Transition { inputs, .. } => inputs.iter().map(|ls| layer_side(ls)).max().unwrap_or(0),
                 })
                 .fold((*width).max(*height), usize::max),
@@ -191,7 +199,7 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
 pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOptions, sources: &dyn SourceProvider) -> FramePlan {
     let Some(seq) = project.sequence(seq_id) else { return FramePlan::Image(crate::Image::new(1, 1)) };
     let (w, h) = output_size(seq, opts.scale);
-    if whole_frame_on_cpu(project, seq, t) {
+    if whole_frame_on_cpu(project, seq, t, opts) {
         return FramePlan::Image(crate::render_sequence(project, seq_id, t, opts, sources));
     }
     let mut layers = PlanStack::default();
@@ -212,37 +220,87 @@ pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOption
 /// Whether [`plan_frame`] hands the frame at `t` back as one CPU image ([`FramePlan::Image`]). A
 /// GPU renderer gains nothing on such a frame, so a caller with only a few of them (the export's
 /// pool) can render it on the CPU without taking one.
-pub fn is_cpu_frame(project: &Project, seq_id: ItemId, t: Tick) -> bool {
-    project.sequence(seq_id).is_none_or(|seq| whole_frame_on_cpu(project, seq, t))
+pub fn is_cpu_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOptions) -> bool {
+    project.sequence(seq_id).is_none_or(|seq| whole_frame_on_cpu(project, seq, t, opts))
 }
 
 /// The frames [`plan_frame`] does not plan: an HDR / wide-gamut sequence composites and converts
-/// on the CPU, and so does a frame with an adjustment layer or a complex transition anywhere at
+/// on the CPU, and so does a frame with an unsupported adjustment or a complex transition at
 /// `t` (whole-frame fallback).
-fn whole_frame_on_cpu(project: &Project, seq: &Sequence, t: Tick) -> bool {
-    !seq.settings.color.is_plain() || !layered_at(project, seq, t)
+fn whole_frame_on_cpu(project: &Project, seq: &Sequence, t: Tick, opts: RenderOptions) -> bool {
+    !seq.settings.color.is_plain() || !layered_at(project, seq, t, opts)
 }
 
-/// Whether the frame of `seq` at `t` can be planned as layers: no adjustment layer and no
-/// transition the compositor cannot mix itself is showing.
-fn layered_at(project: &Project, seq: &Sequence, t: Tick) -> bool {
+/// Restrict adjustments to the exact whole-output coverage fast path of the CPU renderer.
+fn adjustment_ops(project: &Project, seq: &Sequence, item: &TrackItem, t: Tick, opts: RenderOptions) -> Option<Vec<FxOp>> {
+    let mt = item.effect_time_at(t);
+    let (w, h) = output_size(seq, opts.scale);
+    let size = crate::source_size(project, item.item)?;
+    let motion = motion_matrix(seq, item, size, crate::source_par(project, item.item), mt);
+    if size != (seq.settings.width, seq.settings.height)
+        || (motion.a - 1.0).abs() >= 1e-9
+        || (motion.d - 1.0).abs() >= 1e-9
+        || motion.b.abs() >= 1e-12
+        || motion.c.abs() >= 1e-12
+        || motion.e.abs() >= 1e-9
+        || motion.f.abs() >= 1e-9
+        || ![motion.a, motion.b, motion.c, motion.d, motion.e, motion.f].iter().all(|v| v.is_finite())
+        || item.has_opacity_masks()
+        || crate::opacity_blend(item, mt).1 != Blend::Normal
+        || !crate::opacity_blend(item, mt).0.is_finite()
+    {
+        return None;
+    }
+    let cx = crate::effects::FxCtx {
+        t: mt,
+        px_scale: opts.scale,
+        seconds: (t - item.start).seconds(),
+        timecode: "",
+        clip_name: &item.name,
+        project: Some(project),
+        env: None,
+        working: seq.settings.color.working,
+    };
+    item.effects
+        .iter()
+        .filter(|e| e.enabled && e.def().is_some_and(|d| !d.intrinsic))
+        .map(|e| {
+            if e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None) {
+                return None;
+            }
+            FxOp::eval(e, &cx, w, h).filter(FxOp::gpu_ok)
+        })
+        .collect()
+}
+
+/// Whether all visible adjustments and transitions can be represented by plan steps.
+fn layered_at(project: &Project, seq: &Sequence, t: Tick, opts: RenderOptions) -> bool {
+    let mut has_adjustment = false;
+    let mut has_transition = false;
     for tr in &seq.video_tracks {
         if !tr.enabled {
             continue;
         }
-        if let Some(trn) = tr.transitions.iter().find(|x| x.range().contains(t))
-            && !simple_transition(&trn.effect.effect)
-            && trn.effect.effect != "push"
-        {
-            return false;
+        if let Some(trn) = tr.transitions.iter().find(|x| x.range().contains(t)) {
+            has_transition = true;
+            if !simple_transition(&trn.effect.effect) && trn.effect.effect != "push" {
+                return false;
+            }
         }
         if let Some(it) = tr.item_at(t)
+            && it.enabled
             && project.item(it.item).is_some_and(|p| matches!(p.kind, ItemKind::AdjustmentLayer { .. }))
+            && opts.effects
         {
-            return false;
+            has_adjustment = true;
+            if adjustment_ops(project, seq, it, t, opts).is_none() {
+                return false;
+            }
         }
     }
-    true
+    // Layer dissolves assume opaque inputs; enabling adjustments must not move previously
+    // CPU-rendered transitions with partial alpha onto that approximate path.
+    !(has_adjustment && has_transition)
 }
 
 /// Push the layers of every video track of `seq` at `t`, bottom track first (`seq` must be
@@ -300,6 +358,15 @@ fn push_tracks(project: &Project, seq: &Sequence, t: Tick, opts: RenderOptions, 
         if !item.enabled {
             continue;
         }
+        if project.item(item.item).is_some_and(|p| matches!(p.kind, ItemKind::AdjustmentLayer { .. })) {
+            if opts.effects
+                && let Some(ops) = adjustment_ops(project, seq, item, t, opts)
+            {
+                let (opacity, _) = crate::opacity_blend(item, item.effect_time_at(t));
+                layers.0.push(PlanStep::Adjustment { ops, opacity });
+            }
+            continue;
+        }
         push_item(project, seq, item, t, opts, sources, 1.0, None, nest, layers);
     }
 }
@@ -312,7 +379,11 @@ fn push_tracks(project: &Project, seq: &Sequence, t: Tick, opts: RenderOptions, 
 fn nest_is_plain(project: &Project, seq: &Sequence, nested: &Sequence, ft: Tick) -> bool {
     nested.settings.color == seq.settings.color
         && (nested.settings.width, nested.settings.height) == (seq.settings.width, seq.settings.height)
-        && layered_at(project, nested, ft)
+        && layered_at(project, nested, ft, RenderOptions::default())
+        // A nested adjustment must never affect tracks below the nested clip in its parent.
+        && !nested.video_tracks.iter().filter(|tr| tr.enabled).any(|tr| {
+            tr.item_at(ft).filter(|i| i.enabled).is_some_and(|i| project.item(i.item).is_some_and(|p| matches!(p.kind, ItemKind::AdjustmentLayer { .. })))
+        })
         && !nested.video_tracks.iter().any(|tr| tr.enabled && tr.transitions.iter().any(|t| t.range().contains(ft) && !simple_transition(&t.effect.effect)))
         && nested.video_tracks.iter().filter(|tr| tr.enabled).all(|tr| {
             tr.transitions.iter().any(|x| x.range().contains(ft))
@@ -485,6 +556,14 @@ pub fn execute_cpu(plan: &FramePlan) -> crate::Image {
             for step in steps {
                 match step {
                     PlanStep::Layers(layers) => execute_layers(&mut canvas, layers),
+                    PlanStep::Adjustment { ops, opacity } => {
+                        let mut adjusted = canvas.clone();
+                        for op in ops {
+                            op.apply(&mut adjusted);
+                        }
+                        adjusted.scale_alpha(*opacity);
+                        crate::blend::composite(&mut canvas, &adjusted, 1.0, Blend::Normal);
+                    }
                     PlanStep::Transition { inputs, effect, progress, scale } => {
                         let [a, b] = inputs.each_ref().map(|layers| {
                             let mut input = crate::Image::new(*width, *height);
