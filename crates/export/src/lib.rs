@@ -18,6 +18,7 @@ use std::io::Write;
 mod aac_out;
 mod audio_out;
 mod job;
+mod mp3_out;
 mod mxf_out;
 mod pace;
 mod pcm;
@@ -120,6 +121,10 @@ pub enum Format {
     /// the path ends in `.aac`.
     #[serde(rename = "aac", alias = "Aac")]
     Aac,
+    /// MP3: the mix alone, MPEG-1 (or, at 16-24 kHz, MPEG-2) Audio Layer III at a constant bit
+    /// rate in a plain `.mp3` stream, from our own encoder (`filmcraft-mp3enc`).
+    #[serde(rename = "mp3", alias = "Mp3")]
+    Mp3,
     /// MXF OP1a (SMPTE ST 378): frame-wrapped DNxHR, ProRes or H.264 ([`MxfVideoCodec`]) + PCM.
     #[serde(rename = "mxf-op1a", alias = "MxfOp1a")]
     MxfOp1a,
@@ -153,6 +158,7 @@ impl Format {
             "wav" | "waveform" | "waveformaudio" => Format::Wav,
             "aif" | "aiff" | "aifc" => Format::Aiff,
             "aac" | "aacaudio" | "m4a" | "adts" => Format::Aac,
+            "mp3" | "mp3audio" | "mpeg3" | "mpeglayer3" => Format::Mp3,
             _ => return None,
         })
     }
@@ -177,6 +183,7 @@ impl Format {
             Format::Wav => "wav",
             Format::Aiff => "aiff",
             Format::Aac => "aac",
+            Format::Mp3 => "mp3",
             Format::MxfOp1a => "mxf-op1a",
             Format::MxfOpAtom => "mxf-opatom",
         }
@@ -196,6 +203,7 @@ impl Format {
             Format::Wav => "wav",
             Format::Aiff => "aif",
             Format::Aac => "m4a",
+            Format::Mp3 => "mp3",
             Format::MxfOp1a | Format::MxfOpAtom => "mxf",
         }
     }
@@ -219,6 +227,7 @@ impl Format {
             Format::Wav => "Waveform Audio",
             Format::Aiff => "AIFF",
             Format::Aac => "AAC Audio",
+            Format::Mp3 => "MP3",
             Format::MxfOp1a => "MXF OP1a",
             Format::MxfOpAtom => "MXF OP-Atom",
         }
@@ -245,9 +254,9 @@ impl Format {
     pub fn has_builtin_encoder(self) -> bool {
         !matches!(self, Format::Hevc | Format::Av1)
     }
-    /// Sound without picture: Waveform Audio, AIFF and AAC Audio.
+    /// Sound without picture: Waveform Audio, AIFF, AAC Audio and MP3.
     pub fn is_audio_only(self) -> bool {
-        matches!(self, Format::Wav | Format::Aiff | Format::Aac)
+        matches!(self, Format::Wav | Format::Aiff | Format::Aac | Format::Mp3)
     }
     /// H.264 or H.265: MPEG-4 (or QuickTime) with AAC audio, set up with the same bitrate controls.
     pub fn is_h26x(self) -> bool {
@@ -261,7 +270,7 @@ impl Format {
     pub fn is_mp4_with(self, mux: Multiplexer) -> bool {
         self == Format::Av1 || (self.is_h26x() && mux == Multiplexer::Mp4)
     }
-    pub const ALL: [Format; 20] = [
+    pub const ALL: [Format; 21] = [
         Format::H264,
         Format::Hevc,
         Format::Av1,
@@ -280,6 +289,7 @@ impl Format {
         Format::Wav,
         Format::Aiff,
         Format::Aac,
+        Format::Mp3,
         Format::MxfOp1a,
         Format::MxfOpAtom,
     ];
@@ -1754,6 +1764,7 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
     let batch = rayon::current_num_threads().clamp(2, 16) as i64;
     let (bytes, nframes) = match settings.format {
         Format::Aac => aac_out::export(project, seq, settings, range, sources, progress)?,
+        Format::Mp3 => mp3_out::export(project, seq, settings, range, sources, progress)?,
         Format::Wav | Format::Aiff => {
             let mut a = audio_out::AudioOut::new(project.clone(), seq, settings, range)?;
             let (ch, sr, bits) = (a.channels as u16, a.sr, settings.audio.bits);

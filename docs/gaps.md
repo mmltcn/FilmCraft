@@ -192,11 +192,13 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 ## G13. Delivery formats
 
 - **Missing:** AV1 export (software or hardware), MPEG-2 / DVD / Blu-ray, DCP, JPEG 2000 MXF,
-  AS-10 / AS-11, XDCAM HD MXF, P2, compressed (ZIP / PIZ / DWA) OpenEXR, MP3 audio, interlaced
-  encoding, smart render, HEVC software encoder (HEVC exists only where a hardware encoder does).
+  AS-10 / AS-11, XDCAM HD MXF, P2, compressed (ZIP / PIZ / DWA) OpenEXR, interlaced encoding,
+  smart render, HEVC software encoder (HEVC exists only where a hardware encoder does); MP3
+  beyond CBR long blocks (block switching, VBR, Xing / LAME gapless tag, ID3 metadata).
 - **Have:** PNG, TIFF, BMP, JPEG, Targa and DPX (10-bit) image sequences (#779); OpenEXR
   sequences (half float, linear, uncompressed; #806); AAC Audio (audio-only `.m4a`, or ADTS
-  `.aac`; #814); ProRes 4444 / 4444 XQ in the export UI (#342).
+  `.aac`; #814); MP3 (`.mp3`, our own Layer III encoder, CBR 32-320 kbit/s, 16-48 kHz, mono /
+  joint stereo; #977); ProRes 4444 / 4444 XQ in the export UI (#342).
 - **Estimate:** 60–110 h. Doc: [file-format-parity.md](file-format-parity.md).
 
 ## G14. Localization: 8 of the 12 key languages missing
