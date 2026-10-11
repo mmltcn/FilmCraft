@@ -864,6 +864,9 @@ fn build() -> Vec<CommandSpec> {
             s.state.active_sequence = Some(seq);
             s.state.open_sequences = vec![seq];
             s.state.playheads.insert(seq, FrameRate::FPS_23_976.tick_of(4 * 24 + 6));
+            if s.path.take().is_some() {
+                s.previews.reset_temp();
+            }
             s.revision += 1;
             s.saved_revision = s.revision;
             s.events.push(crate::Event::ProjectChanged { revision: s.revision });
