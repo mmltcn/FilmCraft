@@ -596,6 +596,10 @@ pub fn to_json(r: &PlayReport, scenario: &str, res: &str, path: &str) -> Value {
 
 struct Args {
     scenarios: Vec<String>,
+    /// `--file <path>`: play this media file instead of a generated fixture (see the `file`
+    /// scenario). Lets the benchmark run on real footage - the format and encoder that actually
+    /// have to stay smooth - rather than only on what ffmpeg synthesises here.
+    file: Option<String>,
     res: Vec<(String, f32)>,
     gpu: bool,
     seconds: f64,
@@ -608,6 +612,7 @@ struct Args {
 fn parse_args() -> Args {
     let mut a = Args {
         scenarios: vec![],
+        file: None,
         res: vec![("full".into(), 1.0), ("half".into(), 0.5)],
         gpu: true,
         seconds: 8.0,
@@ -639,9 +644,16 @@ fn parse_args() -> Args {
             "--workers" => a.workers = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.workers),
             "--repeat" => a.repeat = it.next().and_then(|v| v.parse().ok()).unwrap_or(1),
             "--json" => a.json = it.next(),
+            "--file" => {
+                a.file = it.next();
+                // A file is its own scenario: nothing else can run without knowing the name.
+                if !a.scenarios.iter().any(|s| s == "file") {
+                    a.scenarios.push("file".to_string());
+                }
+            }
             "--help" | "-h" => {
                 println!(
-                    "bench_playback [--scenario h264-1080,stack3,stack3-blend,stack3-fx,h264-2160,hevc-2160,vp9-2160,av1-2160,demo,after-preview,seek-storm] [--res full,half] [--cpu|--gpu] [--seconds 8] [--refresh 60] [--workers N] [--repeat N] [--json out.json]"
+                    "bench_playback [--scenario h264-1080,h264-1080-422-10b,stack3,stack3-blend,stack3-fx,h264-2160,h264-2160-422-10b,hevc-2160,vp9-2160,av1-2160,demo,after-preview,seek-storm] [--res full,half] [--cpu|--gpu] [--seconds 8] [--refresh 60] [--workers N] [--repeat N] [--json out.json] [--file path/to/clip.mp4]"
                 );
                 std::process::exit(0);
             }
@@ -649,18 +661,61 @@ fn parse_args() -> Args {
         }
     }
     if a.scenarios.is_empty() {
-        a.scenarios = ["h264-1080", "stack3", "stack3-blend", "stack3-fx", "h264-2160", "hevc-2160", "demo", "after-preview", "seek-storm"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        a.scenarios = [
+            "h264-1080",
+            "h264-1080-422-10b",
+            "stack3",
+            "stack3-blend",
+            "stack3-fx",
+            "h264-2160",
+            "h264-2160-422-10b",
+            "hevc-2160",
+            "demo",
+            "after-preview",
+            "seek-storm",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     }
     a
 }
 
 /// Build the session for a scenario (None when its fixtures are unavailable).
-pub fn scenario_session(name: &str) -> Option<(Session, ItemId)> {
+pub fn scenario_session(name: &str, file: Option<&str>) -> Option<(Session, ItemId)> {
     let mut s = Session::default();
     let seq = match name {
+        // Real footage, played at its native resolution: the case that has to stay smooth. The
+        // fixture scenarios above are synthesised here, so they cannot stand in for a camera file -
+        // different encoder, chroma format and bit depth.
+        "file" => {
+            let path = file?;
+            let a = import(&mut s, Path::new(path));
+            let (w, h, secs) = match s.project.item(a).map(|i| &i.kind) {
+                Some(filmcraft_project::ItemKind::Media(m)) => match m.info.video.as_ref() {
+                    // The sequence must be the clip's own length: shorter truncates playback, and
+                    // longer asks the source for frames past its end (which costs a failed fetch
+                    // per frame for the rest of the run).
+                    Some(v) => (v.width, v.height, m.info.duration.seconds().max(1.0)),
+                    None => {
+                        eprintln!("{path}: no video stream");
+                        return None;
+                    }
+                },
+                _ => {
+                    eprintln!("{path}: not a media item");
+                    return None;
+                }
+            };
+            eprintln!("  source {w}x{h}, {secs:.2}s");
+            // Native resolution, capped at 4K so an 8K file cannot ask for an absurd sequence.
+            let scale = (3840.0 / f64::from(w.max(1))).min(2160.0 / f64::from(h.max(1))).min(1.0);
+            let (sw, sh) = (((f64::from(w) * scale) as u32).max(2) & !1, ((f64::from(h) * scale) as u32).max(2) & !1);
+            if (sw, sh) != (w, h) {
+                eprintln!("  sequence capped to {sw}x{sh} (source {w}x{h})");
+            }
+            build_sequence(&mut s, sw, sh, &[(a, 100.0, None, 0.0, 100.0)], &[], secs)
+        }
         "h264-1080" | "seek-storm" => {
             let a = import(&mut s, &fixture("a1080.mp4")?);
             build_sequence(&mut s, 1920, 1080, &[(a, 100.0, None, 0.0, 100.0)], &[], 20.0)
@@ -722,6 +777,16 @@ pub fn scenario_session(name: &str) -> Option<(Session, ItemId)> {
             let a = import(&mut s, &fixture("a2160.mp4")?);
             build_sequence(&mut s, 3840, 2160, &[(a, 100.0, None, 0.0, 100.0)], &[], 10.0)
         }
+        // High 4:2:2 10-bit, the camera format: no hardware decode on consumer GPUs, so this is the
+        // software path end to end.
+        "h264-2160-422-10b" => {
+            let a = import(&mut s, &fixture("a2160_422_10b.mp4")?);
+            build_sequence(&mut s, 3840, 2160, &[(a, 100.0, None, 0.0, 100.0)], &[], 10.0)
+        }
+        "h264-1080-422-10b" => {
+            let a = import(&mut s, &fixture("a1080_422_10b.mp4")?);
+            build_sequence(&mut s, 1920, 1080, &[(a, 100.0, None, 0.0, 100.0)], &[], 20.0)
+        }
         "hevc-2160" | "seek-storm-hevc-2160" => {
             let a = import(&mut s, &fixture("hevc2160.mp4")?);
             build_sequence(&mut s, 3840, 2160, &[(a, 100.0, None, 0.0, 100.0)], &[], 10.0)
@@ -781,8 +846,8 @@ pub fn cli_main() {
             if name == "seek-storm" && res_name != "full" && args.res.len() > 1 {
                 continue;
             }
-            let Some((mut s, seq)) = scenario_session(name) else {
-                println!("{name}: skipped (fixtures unavailable: is ffmpeg installed?)");
+            let Some((mut s, seq)) = scenario_session(name, args.file.as_deref()) else {
+                println!("{name}: skipped (fixtures unavailable: is ffmpeg installed? for `file`, pass --file <path>)");
                 continue;
             };
             let fps = s.project.sequence(seq).map(|q| q.settings.frame_rate.as_f64()).unwrap_or(24.0);

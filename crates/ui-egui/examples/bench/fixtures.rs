@@ -31,6 +31,10 @@ struct Spec {
 }
 
 const X264: &[&str] = &["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"];
+/// H.264 High 4:2:2 10-bit: the format 10-bit camera material (e.g. Lumix `H264_422_LongGOP`) uses,
+/// and the one where hardware decode is unavailable on current consumer GPUs, so it always takes the
+/// software path. Same resolution/preset/CRF as `X264` so the two are comparable.
+const X264_422_10B: &[&str] = &["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-profile:v", "high422", "-pix_fmt", "yuv422p10le"];
 const X265: &[&str] = &["-c:v", "libx265", "-preset", "fast", "-crf", "22", "-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-x265-params", "log-level=error"];
 const VP9: &[&str] = &["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "0", "-crf", "32", "-row-mt", "1", "-pix_fmt", "yuv420p"];
 const AV1: &[&str] = &["-c:v", "libsvtav1", "-preset", "10", "-crf", "35", "-pix_fmt", "yuv420p", "-svtav1-params", "keyint=48"];
@@ -59,7 +63,10 @@ const SPECS: &[Spec] = &[
     Spec { name: "a1080.mp4", src: "testsrc2=s=1920x1080:r=24000/1001:d=20,noise=alls=6:allf=t", secs: 20, audio: true, codec: X264 },
     Spec { name: "b1080.mp4", src: "mandelbrot=s=1920x1080:r=24000/1001,trim=duration=20,noise=alls=6:allf=t", secs: 20, audio: false, codec: X264 },
     Spec { name: "c1080.mp4", src: "smptehdbars=s=1920x1080:r=24000/1001:d=20,noise=alls=10:allf=t+u", secs: 20, audio: false, codec: X264 },
+    // Same 1080p content as `a1080.mp4`, in High 4:2:2 10-bit: the format effect at equal size.
+    Spec { name: "a1080_422_10b.mp4", src: "testsrc2=s=1920x1080:r=24000/1001:d=20,noise=alls=6:allf=t", secs: 20, audio: false, codec: X264_422_10B },
     Spec { name: "a2160.mp4", src: "testsrc2=s=3840x2160:r=24000/1001:d=10,noise=alls=6:allf=t", secs: 10, audio: false, codec: X264 },
+    Spec { name: "a2160_422_10b.mp4", src: "testsrc2=s=3840x2160:r=24000/1001:d=10,noise=alls=6:allf=t", secs: 10, audio: false, codec: X264_422_10B },
     Spec { name: "hevc2160.mp4", src: "testsrc2=s=3840x2160:r=24000/1001:d=10,noise=alls=6:allf=t", secs: 10, audio: false, codec: X265 },
     Spec { name: "vp92160.webm", src: "testsrc2=s=3840x2160:r=24000/1001:d=10,noise=alls=6:allf=t", secs: 10, audio: false, codec: VP9 },
     Spec { name: "av12160.mp4", src: "testsrc2=s=3840x2160:r=24000/1001:d=10,noise=alls=6:allf=t", secs: 10, audio: false, codec: AV1 },

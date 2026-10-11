@@ -206,7 +206,7 @@ pub fn playback(o: &Opts) -> Vec<Value> {
     ];
     let mut rows = Vec::new();
     for &(scenario, res, scale, draft) in cases.iter().filter(|c| o.wants(&format!("{} {}", c.0, c.1))) {
-        let Some((s, seq)) = playback::scenario_session(scenario) else {
+        let Some((s, seq)) = playback::scenario_session(scenario, None) else {
             eprintln!("playback {scenario}: skipped (fixtures unavailable)");
             continue;
         };
@@ -249,7 +249,7 @@ pub fn scrub(o: &Opts) -> Vec<Value> {
     let (seeks, drags) = if o.quick { (8, 3) } else { (24, 8) };
     let mut rows = Vec::new();
     for scenario in ["h264-1080", "h264-2160", "hevc-2160"].into_iter().filter(|s| o.wants(s)) {
-        let Some((s, seq)) = playback::scenario_session(scenario) else {
+        let Some((s, seq)) = playback::scenario_session(scenario, None) else {
             eprintln!("scrub {scenario}: skipped (fixtures unavailable)");
             continue;
         };
