@@ -15,16 +15,24 @@ pub mod ffi;
 #[cfg(test)]
 mod abi_tests;
 
-use filmcraft_codecs::hw::{NalCodec, NalStreamInfo};
+use filmcraft_codecs::hw::{FrameCodec, FrameStreamInfo, NalCodec, NalStreamInfo, StreamInfo};
 use filmcraft_codecs::{CodecError, DecodedFrame, Result, VideoDecoder};
 
 use crate::annexb::to_annex_b;
 use crate::biplanar::Geometry;
 
-/// An NVDEC decoder for one H.264 or HEVC stream.
+/// The stream description of a sample entry NVDEC could take (`avcC` / `hvcC` / `av1C`).
+pub fn stream_info(entry: &filmcraft_isobmff::SampleEntry) -> Option<StreamInfo> {
+    match NalStreamInfo::from_entry(entry) {
+        Some(r) => r.ok().map(StreamInfo::Nal),
+        None => FrameStreamInfo::from_entry(entry)?.ok().map(StreamInfo::Frame),
+    }
+}
+
+/// An NVDEC decoder for one H.264, HEVC, or AV1 stream.
 pub struct NvDecoder {
     session: cuvid::Session,
-    info: NalStreamInfo,
+    info: StreamInfo,
     name: &'static str,
     /// Whether the parser has the stream's parameter sets (sent with the first sample after a reset).
     primed: bool,
@@ -37,27 +45,53 @@ pub struct NvDecoder {
 
 impl NvDecoder {
     /// A decoder for the stream `info` describes, or why NVDEC does not take it on this system.
-    pub fn new(info: NalStreamInfo) -> std::result::Result<Self, String> {
-        let bits = info.bit_depth_luma;
-        let taken = match info.codec {
-            NalCodec::H264 => bits == 8,
-            NalCodec::Hevc => matches!(bits, 8 | 10),
-        };
-        if !taken || info.chroma_format_idc != 1 || info.bit_depth_chroma != bits || info.interlaced {
-            return Err(format!(
-                "{} chroma format {} at {bits}/{}-bit is not taken",
-                if info.interlaced { "interlaced" } else { "progressive" },
-                info.chroma_format_idc,
-                info.bit_depth_chroma
-            ));
+    pub fn new(info: impl Into<StreamInfo>) -> std::result::Result<Self, String> {
+        let info = info.into();
+        match &info {
+            StreamInfo::Nal(nal) => {
+                let bits = nal.bit_depth_luma;
+                let taken = match nal.codec {
+                    NalCodec::H264 => bits == 8,
+                    NalCodec::Hevc => matches!(bits, 8 | 10),
+                };
+                if !taken || nal.chroma_format_idc != 1 || nal.bit_depth_chroma != bits || nal.interlaced {
+                    return Err(format!(
+                        "{} chroma format {} at {bits}/{}-bit is not taken",
+                        if nal.interlaced { "interlaced" } else { "progressive" },
+                        nal.chroma_format_idc,
+                        nal.bit_depth_chroma
+                    ));
+                }
+                let geometry = Geometry { crop: nal.crop, bits, color: nal.color, par: nal.par };
+                let session = cuvid::Session::new(nal.codec, nal.coded, geometry, nal.reorder)?;
+                let name = match nal.codec {
+                    NalCodec::H264 => "NVDEC H.264",
+                    NalCodec::Hevc => "NVDEC HEVC",
+                };
+                Ok(Self { session, info, name, primed: false, skip_rasl: false, fed: 0, fail_after: None })
+            }
+            StreamInfo::Frame(frame) => {
+                if frame.codec != FrameCodec::Av1 {
+                    return Err(format!("{:?} is not handled by NVDEC", frame.codec));
+                }
+                if frame.profile != 0 {
+                    return Err(format!("AV1 profile {} is not taken", frame.profile));
+                }
+                if !matches!(frame.bit_depth, 8 | 10) || frame.mono || frame.subsampling != (1, 1) {
+                    return Err(format!(
+                        "AV1 subsampling {:?}{}, {}-bit is not taken",
+                        frame.subsampling,
+                        if frame.mono { " (mono)" } else { "" },
+                        frame.bit_depth
+                    ));
+                }
+                let bits = frame.bit_depth;
+                let color = frame.color.unwrap_or(filmcraft_color::ColorInfo::REC709);
+                let geometry = Geometry { crop: (0, 0, frame.size.0, frame.size.1), bits, color, par: (1, 1) };
+                let session = cuvid::Session::new(FrameCodec::Av1, frame.size, geometry, 0)?;
+                Ok(Self { session, info, name: "NVDEC AV1", primed: false, skip_rasl: false, fed: 0, fail_after: None })
+            }
         }
-        let geometry = Geometry { crop: info.crop, bits, color: info.color, par: info.par };
-        let session = cuvid::Session::new(info.codec, info.coded, geometry, info.reorder)?;
-        let name = match info.codec {
-            NalCodec::H264 => "NVDEC H.264",
-            NalCodec::Hevc => "NVDEC HEVC",
-        };
-        Ok(Self { session, info, name, primed: false, skip_rasl: false, fed: 0, fail_after: None })
     }
 
     /// Test hook: fail every decode call after the first `n` (a GPU lost mid-stream).
@@ -76,20 +110,33 @@ impl VideoDecoder for NvDecoder {
         if self.fail_after.is_some_and(|n| self.fed > n) {
             return Err(CodecError::Decode("NVDEC decoder failed (test hook)".into()));
         }
-        if self.info.codec == NalCodec::Hevc {
-            let types = self.info.nal_types(sample);
-            if self.info.is_irap(sample) {
-                // IDR pictures (19, 20) have no RASL pictures
-                self.skip_rasl = !self.primed && !types.iter().any(|t| matches!(t, 19 | 20));
-            } else if self.skip_rasl && types.iter().any(|t| matches!(t, 8 | 9)) {
-                // Not output by any decoder (the software one drops them too); the parser drops
-                // them as well, but then shows the CRA picture with the last one's timestamp.
-                return Ok(Vec::new());
+        match &self.info {
+            StreamInfo::Nal(nal) => {
+                if nal.codec == NalCodec::Hevc {
+                    let types = nal.nal_types(sample);
+                    if nal.is_irap(sample) {
+                        // IDR pictures (19, 20) have no RASL pictures
+                        self.skip_rasl = !self.primed && !types.iter().any(|t| matches!(t, 19 | 20));
+                    } else if self.skip_rasl && types.iter().any(|t| matches!(t, 8 | 9)) {
+                        // Not output by any decoder (the software one drops them too); the parser drops
+                        // them as well, but then shows the CRA picture with the last one's timestamp.
+                        return Ok(Vec::new());
+                    }
+                }
+                let data = to_annex_b(nal, sample, !self.primed).map_err(CodecError::Decode)?;
+                self.primed = true;
+                self.session.feed(&data, pts).map(frames).map_err(CodecError::Decode)
+            }
+            StreamInfo::Frame(frame) => {
+                if !self.primed {
+                    self.primed = true;
+                    if !frame.config_obus.is_empty() {
+                        let _ = self.session.feed(&frame.config_obus, pts);
+                    }
+                }
+                self.session.feed(sample, pts).map(frames).map_err(CodecError::Decode)
             }
         }
-        let data = to_annex_b(&self.info, sample, !self.primed).map_err(CodecError::Decode)?;
-        self.primed = true;
-        self.session.feed(&data, pts).map(frames).map_err(CodecError::Decode)
     }
 
     fn flush(&mut self) -> Vec<DecodedFrame> {

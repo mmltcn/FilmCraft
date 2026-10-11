@@ -6,13 +6,13 @@ use crate::state::FrameState;
 
 /// Run CDEF on `fs.cur`; returns the CdefFrame, or None when no block is filtered (CdefFrame
 /// equals CurrFrame).
-pub(crate) fn apply(fs: &FrameState) -> Option<FrameBuf> {
+pub(crate) fn apply(fs: &FrameState) -> crate::Result<Option<FrameBuf>> {
     let fh = &fs.fh;
     if fh.coded_lossless || fh.allow_intrabc || !fs.seq.enable_cdef {
-        return None;
+        return Ok(None);
     }
     let (mi_rows, mi_cols) = (fh.mi_rows as usize, fh.mi_cols as usize);
-    let mut out = fs.cur.clone();
+    let mut out = fs.cur.try_clone()?;
     let mut any = false;
     let mut r = 0;
     while r < mi_rows {
@@ -26,7 +26,7 @@ pub(crate) fn apply(fs: &FrameState) -> Option<FrameBuf> {
         }
         r += 2;
     }
-    any.then_some(out)
+    Ok(any.then_some(out))
 }
 
 fn cdef_block(fs: &FrameState, out: &mut FrameBuf, r: usize, c: usize, idx: usize) -> bool {

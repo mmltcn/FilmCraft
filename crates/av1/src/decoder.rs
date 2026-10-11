@@ -32,6 +32,19 @@ const OBU_FRAME_T: u32 = 6;
 const OBU_REDUNDANT_FRAME_HEADER_T: u32 = 7;
 const OBU_TILE_LIST_T: u32 = 8;
 
+// Bound media-controlled allocations, including padded planes and per-block state.
+const MAX_FRAME_PIXELS: u64 = 8192 * 4320;
+fn validate_size(width: u32, height: u32) -> Result<()> {
+    if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > MAX_FRAME_PIXELS {
+        return Err(Error::Unsupported("frame exceeds the 8K allocation limit"));
+    }
+    Ok(())
+}
+
+fn worker_result<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(Error::WorkerFailed))
+}
+
 /// A stored reference frame (FrameStore plus the saved per-frame state).
 pub(crate) struct RefFrame {
     pub buf: FrameBuf,
@@ -75,6 +88,17 @@ impl<T: Clone> Slot<T> {
         loop {
             if let Some(v) = g.as_ref() {
                 return v.clone();
+            }
+            g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// A shown picture has one consumer: move it out rather than cloning its planes.
+    fn wait_take(&self) -> Result<T> {
+        let mut g = self.value.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(v) = g.take() {
+                return v;
             }
             g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
         }
@@ -126,11 +150,15 @@ impl Output {
     }
 
     fn take(self) -> Result<Picture> {
+        worker_result(|| self.take_inner())
+    }
+
+    fn take_inner(self) -> Result<Picture> {
         match self {
-            Output::Decoded(s) => s.wait().map(|p| Arc::try_unwrap(p).unwrap_or_else(|p| (*p).clone())),
+            Output::Decoded(s) => s.wait_take().and_then(|p| Arc::try_unwrap(p).map_err(|_| Error::WorkerFailed)),
             Output::Existing { slot, seq, width, height, grain, apply_film_grain, pts } => {
                 let rf = slot.wait()?;
-                Ok(output_picture(&seq, &rf, width, height, &grain, apply_film_grain, pts))
+                output_picture(&seq, &rf, width, height, &grain, apply_film_grain, pts)
             }
         }
     }
@@ -155,10 +183,7 @@ impl Workers {
                 .name(format!("av1-frame-{i}"))
                 .spawn(move || {
                     loop {
-                        let job = match rx.lock() {
-                            Ok(r) => r.recv(),
-                            Err(_) => break,
-                        };
+                        let job = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
                         match job {
                             Ok(job) => run_job(*job, &pool, &stats),
                             Err(_) => break,
@@ -210,6 +235,7 @@ pub struct Decoder {
     out: VecDeque<Output>,
     /// pts of the temporal unit being decoded.
     pts: i64,
+    worker_error: Option<Error>,
 }
 
 fn default_threads() -> usize {
@@ -243,7 +269,7 @@ impl Decoder {
 
     /// A decoder using up to `threads` worker threads (1 = decode on the calling thread).
     pub fn with_threads(threads: usize) -> Decoder {
-        let threads = threads.max(1);
+        let threads = threads.clamp(1, 64);
         let pool = Pool::new(threads);
         let stats = Arc::new(Mutex::new(DecodeStats::default()));
         let fthreads = if pool.is_parallel() { frame_threads(threads) } else { 1 };
@@ -270,6 +296,7 @@ impl Decoder {
             max_in_flight: fthreads + 2,
             out: VecDeque::new(),
             pts: 0,
+            worker_error: None,
         }
     }
 
@@ -302,7 +329,11 @@ impl Decoder {
     /// [`Decoder::decode`] with a timestamp that the pictures shown by this chunk carry.
     pub fn decode_pts(&mut self, data: &[u8], pts: i64) -> Result<Vec<Picture>> {
         self.pts = pts;
-        let parsed = self.parse(data);
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.parse(data))).unwrap_or_else(|_| {
+            self.pending = None;
+            self.seen_frame_header = false;
+            Err(Error::WorkerFailed)
+        });
         // Hand out what is finished, then report a parse error.
         let mut pics = Vec::new();
         let max_queue = 2 * self.max_in_flight;
@@ -314,19 +345,22 @@ impl Decoder {
             pics.push(o.take()?);
         }
         parsed?;
+        if let Some(e) = self.worker_error.take() {
+            return Err(e);
+        }
         Ok(pics)
     }
 
     /// Output every picture still held by the decoder (end of stream / before a seek); the
     /// first decoding error is returned instead.
-    pub fn flush(&mut self) -> Vec<Picture> {
-        self.flush_result().unwrap_or_default()
+    pub fn flush(&mut self) -> Result<Vec<Picture>> {
+        self.flush_result()
     }
 
     /// [`Decoder::flush`] reporting decoding errors.
     pub fn flush_result(&mut self) -> Result<Vec<Picture>> {
         let mut pics = Vec::new();
-        let mut err = None;
+        let mut err = self.worker_error.take();
         while let Some(o) = self.out.pop_front() {
             match o.take() {
                 Ok(p) => pics.push(p),
@@ -336,7 +370,9 @@ impl Decoder {
             }
         }
         while let Some(s) = self.in_flight.pop_front() {
-            let _ = s.wait();
+            if let Err(e) = s.wait() {
+                err.get_or_insert(e);
+            }
         }
         match err {
             Some(e) => Err(e),
@@ -422,6 +458,7 @@ impl Decoder {
             match obu_type {
                 OBU_SEQUENCE_HEADER_T => {
                     let s = SequenceHeader::parse(payload)?;
+                    validate_size(s.max_frame_width, s.max_frame_height)?;
                     self.seq = Some(s);
                 }
                 OBU_TEMPORAL_DELIMITER_T => {
@@ -505,9 +542,8 @@ impl Decoder {
         }
         // Encoders exist that code frames slightly larger than the sequence maximum (e.g. a
         // 270-line stream coded as 272 lines); like other decoders we accept them.
-        if fh.upscaled_width > 65536 || fh.frame_height > 65536 {
-            return Err(Error::Invalid("frame size"));
-        }
+        validate_size(fh.upscaled_width, fh.frame_height)?;
+        validate_size(fh.frame_width, fh.frame_height)?;
         if !fh.frame_is_intra {
             for i in 0..REFS_PER_FRAME {
                 if self.ref_frames[fh.ref_frame_idx[i]].is_none() {
@@ -617,15 +653,36 @@ impl Decoder {
                     // Bound the frames in flight (memory): wait for the oldest.
                     while self.in_flight.len() > self.max_in_flight {
                         let Some(s) = self.in_flight.pop_front() else { break };
-                        let _ = s.wait();
+                        if let Err(e) = s.wait() {
+                            self.worker_error.get_or_insert(e);
+                        }
                     }
-                    self.in_flight.retain(|s| !s.is_set());
+                    let error = &mut self.worker_error;
+                    self.in_flight.retain(|s| {
+                        if !s.is_set() {
+                            return true;
+                        }
+                        if let Err(e) = s.wait() {
+                            error.get_or_insert(e);
+                        }
+                        false
+                    });
                 }
-                Err(e) => run_job(*e.0, &self.pool, &self.stats),
+                Err(e) => {
+                    let slot = e.0.slot.clone();
+                    run_job(*e.0, &self.pool, &self.stats);
+                    if let Err(e) = slot.wait() {
+                        self.worker_error.get_or_insert(e);
+                    }
+                }
             }
             return output;
         }
+        let slot = job.slot.clone();
         run_job(*job, &self.pool, &self.stats);
+        if let Err(e) = slot.wait() {
+            self.worker_error.get_or_insert(e);
+        }
         output
     }
 }
@@ -633,7 +690,8 @@ impl Decoder {
 /// Decode a frame job and publish its results.
 fn run_job(job: FrameJob, pool: &Pool, stats: &Mutex<DecodeStats>) {
     let mut st = DecodeStats::default();
-    match decode_frame(&job, pool, &mut st) {
+    let decoded = worker_result(|| decode_frame(&job, pool, &mut st));
+    match decoded {
         Ok((rf, pic)) => {
             if let Some(ps) = &job.picture {
                 ps.set(pic.map(Arc::new).ok_or(Error::Invalid("shown frame without picture")));
@@ -675,22 +733,21 @@ fn decode_frame(job: &FrameJob, pool: &Pool, stats: &mut DecodeStats) -> Result<
         }
     }
     let t = Timer::start();
-    let mut fs = FrameState::new(seq, fh);
+    let mut fs = FrameState::new(seq, fh)?;
     fs.refs = refs;
     fs.ref_info = job.ref_info.clone();
     if fh.primary_ref_frame != PRIMARY_REF_NONE {
         // load_previous_segment_ids( )
-        if let Some(rf) = &fs.refs[fh.ref_frame_idx[fh.primary_ref_frame]]
+        if let Some(rf) = fs.refs[fh.ref_frame_idx[fh.primary_ref_frame]].clone()
             && fh.seg.enabled
             && rf.mi_cols == fs.mi.cols
             && rf.mi_rows == fs.mi.rows
         {
-            let ids = rf.segment_ids.clone();
-            fs.prev_segment_ids.copy_from_slice(&ids);
+            fs.prev_segment_ids.copy_from_slice(&rf.segment_ids);
         }
     }
     if fh.use_ref_frame_mvs {
-        motion_field_estimation(&mut fs);
+        motion_field_estimation(&mut fs)?;
     }
     let mut cdfs = if fh.primary_ref_frame == PRIMARY_REF_NONE {
         Cdfs::new(fh.quant.base_q_idx)
@@ -710,7 +767,7 @@ fn decode_frame(job: &FrameJob, pool: &Pool, stats: &mut DecodeStats) -> Result<
     {
         cdfs = s;
     }
-    crate::postfilter::apply(&mut fs, stats, pool, job.draft);
+    crate::postfilter::apply(&mut fs, stats, pool, job.draft)?;
     stats.draft_frames += job.draft as u64;
     let t = Timer::start();
     stats.frames += 1;
@@ -718,7 +775,7 @@ fn decode_frame(job: &FrameJob, pool: &Pool, stats: &mut DecodeStats) -> Result<
         let prev = std::mem::take(&mut fs.prev_segment_ids);
         fs.mi.segment_id.copy_from_slice(&prev);
     }
-    let (mf_refs, mf_mvs) = motion_vector_storage(&fs);
+    let (mf_refs, mf_mvs) = motion_vector_storage(&fs)?;
     let rf = Arc::new(RefFrame {
         buf: std::mem::take(&mut fs.cur),
         cdfs,
@@ -733,11 +790,14 @@ fn decode_frame(job: &FrameJob, pool: &Pool, stats: &mut DecodeStats) -> Result<
         saved_ref_frames: mf_refs,
         saved_mvs: mf_mvs,
     });
-    let pic = fh.show_frame.then(|| {
-        let mut p = output_picture(seq, &rf, fh.upscaled_width as usize, fh.frame_height as usize, &fh.film_grain, job.apply_film_grain, job.pts);
-        p.draft = job.draft;
-        p
-    });
+    let pic = fh
+        .show_frame
+        .then(|| -> Result<Picture> {
+            let mut p = output_picture(seq, &rf, fh.upscaled_width as usize, fh.frame_height as usize, &fh.film_grain, job.apply_film_grain, job.pts)?;
+            p.draft = job.draft;
+            Ok(p)
+        })
+        .transpose()?;
     stats.add(Stage::Output, t.secs());
     Ok((rf, pic))
 }
@@ -764,7 +824,7 @@ fn decode_tiles(pool: &Pool, fs: &mut FrameState, cdfs: &Cdfs, tiles: &[(usize, 
                 let (c0, c1) = (ti.mi_col_starts[col] as usize, ti.mi_col_starts[col + 1] as usize);
                 fs.tile_state(r0, r1.min(fs.mi.rows), c0, c1.min(fs.mi.cols))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let sh = &fs.sh;
         let results = pool.map_mut(&mut states, |i, t| run(sh, t, tiles[i].0, &tiles[i].1));
         for t in &states {
@@ -778,7 +838,7 @@ fn decode_tiles(pool: &Pool, fs: &mut FrameState, cdfs: &Cdfs, tiles: &[(usize, 
         }
         return Ok(saved);
     }
-    let mut t = fs.take_tile_state();
+    let mut t = fs.take_tile_state()?;
     let mut saved = None;
     let mut res = Ok(());
     for (num, data) in tiles {
@@ -795,7 +855,7 @@ fn decode_tiles(pool: &Pool, fs: &mut FrameState, cdfs: &Cdfs, tiles: &[(usize, 
     res.map(|_| saved)
 }
 
-fn output_picture(seq: &SequenceHeader, rf: &RefFrame, w: usize, h: usize, grain: &FilmGrainParams, apply_film_grain: bool, pts: i64) -> Picture {
+fn output_picture(seq: &SequenceHeader, rf: &RefFrame, w: usize, h: usize, grain: &FilmGrainParams, apply_film_grain: bool, pts: i64) -> Result<Picture> {
     let ssx = rf.subsampling_x as usize;
     let ssy = rf.subsampling_y as usize;
     let num_planes = rf.buf.num_planes;
@@ -803,7 +863,8 @@ fn output_picture(seq: &SequenceHeader, rf: &RefFrame, w: usize, h: usize, grain
     for p in 0..num_planes {
         let (pw, ph) = if p == 0 { (w, h) } else { ((w + ssx) >> ssx, (h + ssy) >> ssy) };
         let src = &rf.buf.planes[p];
-        let mut v = Vec::with_capacity(pw * ph);
+        let mut v = Vec::new();
+        v.try_reserve_exact(pw.checked_mul(ph).ok_or(Error::AllocationFailed)?).map_err(|_| Error::AllocationFailed)?;
         for y in 0..ph {
             v.extend_from_slice(&src.row(y)[..pw]);
         }
@@ -825,17 +886,17 @@ fn output_picture(seq: &SequenceHeader, rf: &RefFrame, w: usize, h: usize, grain
         draft: false,
     };
     if apply_film_grain && seq.film_grain_params_present && grain.apply_grain {
-        crate::grain::apply(&mut pic, grain, seq);
+        crate::grain::apply(&mut pic, grain, seq)?;
     }
-    pic
+    Ok(pic)
 }
 
 /// Motion field motion vector storage process (7.19): (MfRefFrames, MfMvs).
-fn motion_vector_storage(fs: &FrameState) -> (Vec<i8>, Vec<[i32; 2]>) {
+fn motion_vector_storage(fs: &FrameState) -> Result<(Vec<i8>, Vec<[i32; 2]>)> {
     let mi = &fs.mi;
     let n = mi.rows * mi.cols;
-    let mut refs = vec![-1i8; n];
-    let mut mvs = vec![[0i32; 2]; n];
+    let mut refs = crate::frame::allocate(-1i8, n)?;
+    let mut mvs = crate::frame::allocate([0i32; 2], n)?;
     let fh = &fs.fh;
     for i in 0..n {
         for list in 0..2 {
@@ -854,15 +915,15 @@ fn motion_vector_storage(fs: &FrameState) -> (Vec<i8>, Vec<[i32; 2]>) {
             }
         }
     }
-    (refs, mvs)
+    Ok((refs, mvs))
 }
 
 /// Motion field estimation process (7.9).
-fn motion_field_estimation(fs: &mut FrameState) {
+fn motion_field_estimation(fs: &mut FrameState) -> Result<()> {
     let w8 = fs.fh.mi_cols as usize >> 1;
     let h8 = fs.fh.mi_rows as usize >> 1;
     for r in LAST_FRAME..=ALTREF_FRAME {
-        fs.motion_field[r] = vec![[crate::mvpred::INVALID_MV, crate::mvpred::INVALID_MV]; w8 * h8];
+        fs.motion_field[r] = crate::frame::allocate([crate::mvpred::INVALID_MV, crate::mvpred::INVALID_MV], w8 * h8)?;
     }
     let fh = fs.fh.clone();
     let seq = fs.seq.clone();
@@ -886,6 +947,7 @@ fn motion_field_estimation(fs: &mut FrameState) {
     if ref_stamp >= 0 {
         project(fs, LAST2_FRAME, -1);
     }
+    Ok(())
 }
 
 fn get_mv_projection(mv: [i32; 2], numerator: i32, denominator: i32) -> [i32; 2] {
@@ -946,4 +1008,42 @@ fn project(fs: &mut FrameState, src: usize, dst_sign: i32) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod robustness_tests {
+    use super::*;
+    #[test]
+    fn worker_panic_is_an_error_and_can_complete_a_slot() {
+        let slot = Slot::<u8>::new();
+        let result = worker_result(|| -> Result<u8> { panic!("synthetic failed decoder job") });
+        slot.set(result);
+        assert_eq!(slot.wait(), Err(Error::WorkerFailed));
+        assert_eq!(worker_result(|| Ok(7)), Ok(7));
+    }
+    #[test]
+    fn flush_preserves_shown_and_hidden_worker_errors() {
+        for shown in [false, true] {
+            let mut dec = Decoder::with_threads(1);
+            if shown {
+                let slot = Slot::<Arc<Picture>>::new();
+                slot.set(Err(Error::WorkerFailed));
+                dec.out.push_back(Output::Decoded(slot));
+            } else {
+                let slot = Slot::<Arc<RefFrame>>::new();
+                slot.set(Err(Error::WorkerFailed));
+                dec.in_flight.push_back(slot);
+            }
+            assert_eq!(dec.flush(), Err(Error::WorkerFailed));
+            assert!(dec.flush().unwrap().is_empty());
+        }
+    }
+    #[test]
+    fn hostile_dimensions_are_rejected_before_allocation() {
+        for (w, h) in [(0, 1), (1, 0), (65536, 65536), (u32::MAX, 2), (8192, 8192)] {
+            assert!(validate_size(w, h).is_err(), "{w}x{h}");
+        }
+        assert!(validate_size(3840, 2160).is_ok());
+        assert!(validate_size(8192, 4320).is_ok());
+    }
 }

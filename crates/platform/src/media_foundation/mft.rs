@@ -17,8 +17,8 @@ use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform, MF_E_NO_MORE_TYPES, MF_E_NOTACCEPTING,
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MINIMUM_DISPLAY_APERTURE,
-    MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC, MF_VERSION, MFMediaType_Video, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT,
-    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_FRIENDLY_NAME_Attribute, MFT_MESSAGE_COMMAND_DRAIN,
+    MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC, MF_VERSION, MFMediaType_Video, MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG,
+    MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_FRIENDLY_NAME_Attribute, MFT_MESSAGE_COMMAND_DRAIN,
     MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER,
     MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO, MFVideoFormat_NV12, MFVideoFormat_P010, MFVideoInterlace_Progressive,
 };
@@ -165,6 +165,33 @@ impl MfApi {
             for i in 0..count as usize {
                 // SAFETY: `list` holds `count` pointers in memory allocated with CoTaskMemAlloc, each
                 // null or a reference to an `IMFActivate` that this takes over.
+                unsafe {
+                    let p = *list.add(i);
+                    if !p.is_null() {
+                        out.push(IMFActivate::from_raw(p));
+                    }
+                }
+            }
+            // SAFETY: the array itself was allocated by MFTEnumEx with CoTaskMemAlloc.
+            unsafe { CoTaskMemFree(Some(list as *const c_void)) };
+        }
+        Ok(out)
+    }
+
+    /// The encoder MFTs producing output of `subtype`, hardware ones first, as activation objects.
+    pub fn encoders(&self, subtype: GUID) -> Result<Vec<IMFActivate>, String> {
+        let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: subtype };
+        let flags = MFT_ENUM_FLAG(MFT_ENUM_FLAG_SYNCMFT.0 | MFT_ENUM_FLAG_ASYNCMFT.0 | MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_SORTANDFILTER.0);
+        let (mut list, mut count) = (std::ptr::null_mut::<*mut c_void>(), 0u32);
+        // SAFETY: the type info and the out-pointers refer to live locals.
+        let hr = unsafe { (self.enum_transforms)(MFT_CATEGORY_VIDEO_ENCODER, flags.0 as u32, std::ptr::null(), &output, &mut list, &mut count) };
+        if hr.is_err() {
+            return Err(format!("MFTEnumEx failed ({hr:?})"));
+        }
+        let mut out = Vec::new();
+        if !list.is_null() {
+            for i in 0..count as usize {
+                // SAFETY: list holds count pointers in memory allocated with CoTaskMemAlloc.
                 unsafe {
                     let p = *list.add(i);
                     if !p.is_null() {
@@ -398,6 +425,24 @@ impl Mft {
 /// diagnostics.
 pub fn describe(api: &MfApi, subtype: GUID) -> Vec<String> {
     let Ok(list) = api.decoders(subtype) else { return vec!["enumeration failed".into()] };
+    list.iter()
+        .map(|a| {
+            let name = friendly_name(a).unwrap_or_else(|| "?".into());
+            // SAFETY: plain COM calls on live interfaces.
+            let (asynchronous, d3d11) = unsafe {
+                match a.ActivateObject::<IMFTransform>().and_then(|t| t.GetAttributes()) {
+                    Ok(attrs) => (attrs.GetUINT32(&MF_TRANSFORM_ASYNC).unwrap_or(0) != 0, attrs.GetUINT32(&MF_SA_D3D11_AWARE).unwrap_or(0) != 0),
+                    Err(_) => (false, false),
+                }
+            };
+            format!("{name} (async {asynchronous}, Direct3D 11 aware {d3d11})")
+        })
+        .collect()
+}
+
+/// One line per encoder MFT producing `subtype`: diagnostics.
+pub fn describe_encoders(api: &MfApi, subtype: GUID) -> Vec<String> {
+    let Ok(list) = api.encoders(subtype) else { return vec!["enumeration failed".into()] };
     list.iter()
         .map(|a| {
             let name = friendly_name(a).unwrap_or_else(|| "?".into());

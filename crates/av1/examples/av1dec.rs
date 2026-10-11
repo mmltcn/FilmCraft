@@ -45,7 +45,13 @@ fn main() {
             }
             i += 1;
         }
-        write(dec.flush());
+        match dec.flush() {
+            Ok(pics) => write(pics),
+            Err(e) => {
+                eprintln!("flush: {e}");
+                return;
+            }
+        }
     }
     eprintln!("{n} pictures in {:.3}s", t0.elapsed().as_secs_f64());
     if std::env::var_os("AV1_STATS").is_some() {

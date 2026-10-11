@@ -79,6 +79,12 @@ pub fn capabilities() -> String {
         let list = mft::describe(api, subtype);
         out += &format!("{name} decoder MFTs: {}\n", if list.is_empty() { "none".into() } else { list.join("; ") });
     }
+    for (name, subtype) in
+        [("H.264", mf::MFVideoFormat_H264), ("HEVC", mf::MFVideoFormat_HEVC), ("VP9", mf::MFVideoFormat_VP90), ("AV1", mf::MFVideoFormat_AV1)]
+    {
+        let list = mft::describe_encoders(api, subtype);
+        out += &format!("{name} encoder MFTs: {}\n", if list.is_empty() { "none".into() } else { list.join("; ") });
+    }
     let profiles = gpu.profiles();
     for (name, guid) in [
         ("H.264 VLD", d3d::D3D11_DECODER_PROFILE_H264_VLD_NOFGT),
