@@ -423,7 +423,8 @@ pub fn parse(text: &str) -> Result<Document> {
     let Some(body) = root.children().find(|n| n.is_element() && n.tag_name().name() == "body") else {
         return Ok(doc);
     };
-    walk(body, Tick::ZERO, &tm, &styles, Fmt::default(), &mut doc);
+    let (body_begin, body_end) = times(body, Tick::ZERO, &tm, &mut doc);
+    walk(body, body_begin.unwrap_or(Tick::ZERO), body_end, &tm, &styles, Fmt::default(), &mut doc);
     doc.cues.sort_by_key(|c| (c.start, c.end));
     Ok(doc)
 }
@@ -447,20 +448,32 @@ fn times(n: roxmltree::Node, parent: Tick, tm: &Timing, doc: &mut Document) -> (
     (begin, end)
 }
 
-fn walk(n: roxmltree::Node, parent: Tick, tm: &Timing, styles: &std::collections::HashMap<String, Fmt>, fmt: Fmt, doc: &mut Document) {
+fn walk(
+    n: roxmltree::Node,
+    parent: Tick,
+    parent_end: Option<Tick>,
+    tm: &Timing,
+    styles: &std::collections::HashMap<String, Fmt>,
+    fmt: Fmt,
+    doc: &mut Document,
+) {
     for c in n.children().filter(|c| c.is_element()) {
         let f = style_of(c, styles, fmt);
         match c.tag_name().name() {
             "div" => {
-                let (b, _) = times(c, parent, tm, doc);
-                walk(c, b.unwrap_or(parent), tm, styles, f, doc);
+                let (b, e) = times(c, parent, tm, doc);
+                walk(c, b.unwrap_or(parent), e.or(parent_end), tm, styles, f, doc);
             }
             "p" => {
                 let (b, e) = times(c, parent, tm, doc);
+                // Absent begin/end inherit the container (begin defaults to 0). A present but
+                // unparsable begin is not implicit: do not invent a 0–end cue.
+                let start = if attr(c, "begin").is_some() { b } else { Some(parent) };
+                let end = if attr(c, "end").is_some() || attr(c, "dur").is_some() { e } else { parent_end };
                 let speaker = attr(c, "agent").map(|a| a.trim().trim_start_matches('_').replace('_', " "));
                 let id = c.attributes().find(|a| a.name() == "id").map(|a| a.value().to_string());
-                match (b, e) {
-                    (Some(b), Some(e)) => {
+                match (start, end) {
+                    (Some(start), Some(e)) => {
                         let mut o = Out { s: String::new(), pending: false };
                         let tags: Vec<&str> = [(f.italic, "i"), (f.bold, "b"), (f.underline, "u")].into_iter().filter(|x| x.0).map(|x| x.1).collect();
                         for t in &tags {
@@ -471,13 +484,13 @@ fn walk(n: roxmltree::Node, parent: Tick, tm: &Timing, styles: &std::collections
                             o.s.push_str(&format!("</{t}>"));
                         }
                         let text = clean(&o.s);
-                        if e > b && !text.is_empty() {
-                            doc.cues.push(Cue { start: b, end: e, text, speaker, id, ..Default::default() });
+                        if e > start && !text.is_empty() {
+                            doc.cues.push(Cue { start, end: e, text, speaker, id, ..Default::default() });
                         }
                     }
                     _ => {
                         // untimed paragraph: its timed spans are the cues
-                        let base = b.unwrap_or(parent);
+                        let base = start.unwrap_or(parent);
                         for sp in c.children().filter(|x| x.is_element() && x.tag_name().name() == "span") {
                             let (sb, se) = times(sp, base, tm, doc);
                             if let (Some(sb), Some(se)) = (sb, se) {
@@ -636,5 +649,32 @@ mod tests {
         assert_eq!(back.cues[0].speaker.as_deref(), Some("Ann Lee"));
         let d = write(&doc, Flavor::Dfxp, Some(r), "en");
         assert!(d.contains(DFXP_PROFILE) && d.contains("begin=\"00:00:01.001\""), "{d}");
+    }
+
+    #[test]
+    fn inherits_container_timing_when_paragraph_has_none() {
+        let xml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body begin="0s" end="5s"><div><p>Hello</p></div></body></tt>"#;
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "Hello");
+        assert_eq!(doc.cues[0].start, Tick::ZERO);
+        assert_eq!(doc.cues[0].end, Tick(5 * TICKS_PER_SECOND));
+    }
+
+    #[test]
+    fn duration_without_begin_starts_at_zero_or_container() {
+        let xml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p dur="2s">Hello</p></div></body></tt>"#;
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "Hello");
+        assert_eq!(doc.cues[0].start, Tick::ZERO);
+        assert_eq!(doc.cues[0].end, Tick(2 * TICKS_PER_SECOND));
+
+        let xml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div begin="3s"><p dur="2s">Hi</p></div></body></tt>"#;
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "Hi");
+        assert_eq!(doc.cues[0].start, Tick(3 * TICKS_PER_SECOND));
+        assert_eq!(doc.cues[0].end, Tick(5 * TICKS_PER_SECOND));
     }
 }
