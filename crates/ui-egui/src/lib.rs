@@ -891,7 +891,12 @@ impl FilmcraftApp {
         // restart from the end → from the start (Settings ▸ Timeline ▸ "At playback end, return to
         // beginning when restarting playback")
         let dur = self.session.active_sequence().map(|q| q.duration()).unwrap_or_default();
-        if speed > 0.0 && self.session.prefs.timeline.return_to_beginning && self.session.playhead() >= dur - self.session.sequence_rate().frame_duration() {
+        // (not while a voice-over take starts: it was put exactly where the take must begin, e.g. on empty timeline past the end)
+        if speed > 0.0
+            && self.session.prefs.timeline.return_to_beginning
+            && !self.session.voiceover.recording()
+            && self.session.playhead() >= dur - self.session.sequence_rate().frame_duration()
+        {
             self.session.set_playhead(Tick::ZERO);
         }
         // A loop restart keeps counting into the same meter.
@@ -1081,7 +1086,8 @@ impl FilmcraftApp {
         if let Some(end) = self.playback.stop_at.filter(|e| t >= *e && self.playback.speed > 0.0 && !self.playback.looping) {
             self.session.set_playhead(end);
             self.stop();
-        } else if t >= hi && self.playback.speed > 0.0 {
+        } else if t >= hi && self.playback.speed > 0.0 && (self.playback.looping || !self.session.voiceover.recording()) {
+            // a voice-over take keeps playing (and recording) into the empty timeline past the end
             if self.playback.looping {
                 self.session.set_playhead(lo);
                 self.play(self.playback.speed);
@@ -2222,6 +2228,38 @@ mod audio_recovery_tests {
         assert_eq!(app.playback.anchor_tick, displayed);
         assert_eq!(app.session.playhead(), displayed);
         assert!(app.ui.status.contains("Audio output failed"));
+        app.stop();
+    }
+}
+
+#[cfg(test)]
+mod voiceover_playback_tests {
+    use super::*;
+
+    #[test]
+    fn a_voice_over_take_records_into_the_empty_timeline_past_the_end() {
+        let mut session = Session::default();
+        session.execute("file.openDemoProject", json!({})).unwrap();
+        session.execute("audio.voiceover.settings", json!({"prerollSeconds": 0.0})).unwrap();
+        session.prefs.timeline.return_to_beginning = true;
+        let ctx = egui::Context::default();
+        let mut app = FilmcraftApp::new(session);
+        app.audio = None;
+        let dur = app.session.active_sequence().map(|q| q.duration()).unwrap();
+        let from = app.session.sequence_rate().snap(dur + Tick::from_seconds_f64(60.0));
+        app.session.set_playhead(from);
+        panels::voiceover::toggle(&mut app, None).unwrap();
+        // play() keeps the record point instead of returning to the beginning
+        assert!(app.playback.playing);
+        assert_eq!(app.session.playhead(), from);
+        app.end_preroll(0.0);
+        // and one second later the take is still playing and recording, not stopped at the end
+        let mut output = ctx.run_ui(egui::RawInput { time: Some(1.0), ..Default::default() }, |ui| app.advance_playback(ui.ctx()));
+        output.textures_delta.clear();
+        assert!(app.playback.playing);
+        assert!(app.session.voiceover.recording());
+        assert!(app.session.playhead() > from, "{:?} <= {from:?}", app.session.playhead());
+        app.session.execute("audio.voiceover.stop", json!({"discard": true})).unwrap();
         app.stop();
     }
 }
