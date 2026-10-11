@@ -100,6 +100,23 @@ fn a_linked_partner_on_a_locked_track_stays_and_the_listed_clip_still_moves() {
     assert_eq!(*s.project, *before);
 }
 
+/// Moving a clip off a locked track used to leave it there and place another item with the same
+/// clip id on the destination (#917). The source is locked, so the move is refused.
+#[test]
+fn a_clip_on_a_locked_track_cannot_move_to_another_track() {
+    let mut s = demo();
+    let (v_track, v, _, _) = pair_in_an_empty_sequence(&mut s, 0.0);
+    s.execute("timeline.setTrack", json!({"track": "V1", "locked": true})).unwrap();
+    let before = s.project.clone();
+    let e = s.execute("timeline.move", json!({"moves": [{"clip": v.id.0, "track": "V2", "time": v.start.0}], "linked": false})).unwrap_err();
+    assert!(matches!(&e, EngineError::Edit(filmcraft_edit::EditError::Locked)), "{e:?}");
+    assert_eq!(*s.project, *before);
+    let q = s.active_sequence().unwrap();
+    assert_eq!(q.find_item(v.id).map(|(t, _)| t), Some(v_track));
+    assert_eq!(q.video_tracks[1].items.len(), 0);
+    q.check().unwrap();
+}
+
 /// A partner that would land where it already is does not move: re-placing it would drop the
 /// transitions at its edges and list it in `moved` for nothing. Moving only the picture to
 /// another track at the same time leaves the sound as it was.

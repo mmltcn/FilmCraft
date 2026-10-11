@@ -503,7 +503,10 @@ pub fn move_items(seq: &mut Sequence, moves: &[(ClipId, TrackId, Tick)], insert_
     let mut work = seq.clone();
     let mut placed = Vec::new();
     for (c, dest, start) in moves {
-        let (_, it) = work.find_item(*c).ok_or(EditError::NoItem(*c))?;
+        let (src, it) = work.find_item(*c).ok_or(EditError::NoItem(*c))?;
+        if work.track(src).is_some_and(|t| t.locked) {
+            return Err(EditError::Locked);
+        }
         let mut it = it.clone();
         if work.track(*dest).ok_or(EditError::NoTrack(*dest))?.locked {
             return Err(EditError::Locked);
