@@ -397,16 +397,30 @@ fn move_clips(s: &mut Session, p: &Value) -> Result<Value> {
 /// most constrained clip (media end or start) still moves, and no linked partner slips further.
 pub(crate) fn slip_together(q: &mut filmcraft_project::Sequence, ctx: &mut edit::EditCtx<'_>, deltas: &[(ClipId, Tick)]) -> Result<()> {
     let mut scale = 1.0_f64;
+    let mut any = false;
     for (c, d) in deltas {
         if d.0 == 0 {
             continue;
         }
-        let x = edit::slip(&mut q.clone(), *c, *d, ctx)?;
-        scale = scale.min(x.0.abs() as f64 / d.0.abs() as f64);
+        match edit::slip(&mut q.clone(), *c, *d, ctx) {
+            Err(edit::EditError::Locked) => continue,
+            Err(e) => return Err(e.into()),
+            Ok(x) => {
+                any = true;
+                scale = scale.min(x.0.abs() as f64 / d.0.abs() as f64);
+            }
+        }
+    }
+    if !any && deltas.iter().any(|(_, d)| d.0 != 0) {
+        return Err(edit::EditError::Locked.into());
     }
     for (c, d) in deltas {
         let dd = if scale < 1.0 { Tick((d.0 as f64 * scale).round() as i64) } else { *d };
-        edit::slip(q, *c, dd, ctx)?;
+        match edit::slip(q, *c, dd, ctx) {
+            Err(edit::EditError::Locked) => continue,
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
     }
     Ok(())
 }
@@ -432,11 +446,21 @@ pub fn with_links(s: &Session, clips: &[ClipId]) -> Vec<ClipId> {
 /// clamped by each one's media and neighbours.
 fn clamp_trim_linked(q: &filmcraft_project::Sequence, clips: &[ClipId], edge: Edge, mode: TrimMode, delta: Tick, ctx: &edit::EditCtx) -> Result<Tick> {
     let mut d = delta;
+    let mut any = false;
     for c in clips {
-        let x = edit::clamp_trim(q, *c, edge, mode, d, ctx)?;
-        if x.abs() < d.abs() {
-            d = x;
+        match edit::clamp_trim(q, *c, edge, mode, d, ctx) {
+            Err(edit::EditError::Locked) => continue,
+            Err(e) => return Err(e.into()),
+            Ok(x) => {
+                any = true;
+                if x.abs() < d.abs() {
+                    d = x;
+                }
+            }
         }
+    }
+    if !any {
+        return Err(edit::EditError::Locked.into());
     }
     Ok(d)
 }
@@ -1462,7 +1486,12 @@ fn build() -> Vec<CommandSpec> {
                         }
                     }
                     for group in &groups {
-                        edit::set_speed_group(q, group, speed, reverse, ripple, ctx)?;
+                        let unlocked: Vec<ClipId> =
+                            group.iter().copied().filter(|c| q.find_item(*c).is_some_and(|(t, _)| q.track(t).is_some_and(|tr| !tr.locked))).collect();
+                        if unlocked.is_empty() {
+                            return Err(edit::EditError::Locked.into());
+                        }
+                        edit::set_speed_group(q, &unlocked, speed, reverse, ripple, ctx)?;
                     }
                     for c in &sel {
                         if let (Some(m), Some((_, it))) = (interp, q.find_item_mut(*c)) {
@@ -2302,6 +2331,9 @@ fn build() -> Vec<CommandSpec> {
                     .unwrap_or_default();
                 let clips = with_links(s, &[c]);
                 let applied = s.edit_sequence(if mode == TrimMode::Ripple { "Ripple Trim" } else { "Trim" }, |q, ctx, st| {
+                    if q.find_item(c).is_some_and(|(t, _)| q.track(t).is_some_and(|tr| tr.locked)) {
+                        return Err(edit::EditError::Locked.into());
+                    }
                     let before = q.find_item(c).map(|(_, i)| i.range());
                     // clamp across all linked partners, then apply the common delta
                     let mut dd = clamp_trim_linked(q, &clips, edge, mode, d, ctx)?;
@@ -2309,6 +2341,10 @@ fn build() -> Vec<CommandSpec> {
                         // the clip and its linked partners ripple as one edit
                         let mut group = vec![c];
                         group.extend(clips.iter().copied().filter(|o| *o != c));
+                        group.retain(|id| q.find_item(*id).is_some_and(|(t, _)| q.track(t).is_some_and(|tr| !tr.locked)));
+                        if group.is_empty() {
+                            return Err(edit::EditError::Locked.into());
+                        }
                         dd = edit::ripple_trim_group(q, &group, edge, dd, ctx)?;
                         if st.ripple_sequence_markers
                             && let Some(r) = before
@@ -2322,7 +2358,11 @@ fn build() -> Vec<CommandSpec> {
                         }
                     } else {
                         for c in &clips {
-                            edit::trim(q, *c, edge, mode, dd, ctx)?;
+                            match edit::trim(q, *c, edge, mode, dd, ctx) {
+                                Err(edit::EditError::Locked) => continue,
+                                Err(e) => return Err(e.into()),
+                                Ok(_) => {}
+                            }
                         }
                     }
                     Ok(dd)
@@ -2441,7 +2481,14 @@ fn build() -> Vec<CommandSpec> {
                 .unwrap_or_default();
             let clips = with_links(s, &[c]);
             // clamp across all linked partners, then slide them by the common delta
-            s.edit_sequence("Slide", |q, ctx, _| Ok(edit::slide_items(q, &clips, d, ctx)?))?;
+            s.edit_sequence("Slide", |q, ctx, _| {
+                let unlocked: Vec<ClipId> =
+                    clips.iter().copied().filter(|id| q.find_item(*id).is_some_and(|(t, _)| q.track(t).is_some_and(|tr| !tr.locked))).collect();
+                if unlocked.is_empty() {
+                    return Err(edit::EditError::Locked.into());
+                }
+                Ok(edit::slide_items(q, &unlocked, d, ctx)?)
+            })?;
             Ok(Value::Null)
         }),
         cmd!("timeline.rateStretch", "Rate Stretch", [], None, r#"{"clip":id,"edge":"in|out","delta":ticks}"#, has_seq, |s, p| {
@@ -2456,8 +2503,19 @@ fn build() -> Vec<CommandSpec> {
             let clips = with_links(s, &[c]);
             let sp = s.edit_sequence("Rate Stretch", |q, ctx, _| {
                 let mut sp = 1.0;
+                let mut any = false;
                 for c in &clips {
-                    sp = edit::rate_stretch(q, *c, edge, d, ctx)?;
+                    match edit::rate_stretch(q, *c, edge, d, ctx) {
+                        Err(edit::EditError::Locked) => continue,
+                        Err(e) => return Err(e.into()),
+                        Ok(s) => {
+                            any = true;
+                            sp = s;
+                        }
+                    }
+                }
+                if !any {
+                    return Err(edit::EditError::Locked.into());
                 }
                 Ok(sp)
             })?;

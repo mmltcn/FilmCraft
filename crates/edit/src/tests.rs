@@ -275,6 +275,17 @@ fn regular_trim_respects_neighbours_and_handles() {
 }
 
 #[test]
+fn trim_on_a_locked_track_is_refused() {
+    let mut fx = Fx::new();
+    let v1 = fx.v(0);
+    let a = fx.put(v1, 0, 100, 0);
+    fx.seq.track_mut(v1).unwrap().locked = true;
+    let mut n = fx.next;
+    assert_eq!(trim(&mut fx.seq, a, Edge::Out, TrimMode::Regular, -f(20), &mut Fx::ctx(&mut n)), Err(EditError::Locked));
+    assert_eq!(fx.spans(v1), vec![(0, 100)]);
+}
+
+#[test]
 fn held_regular_in_trim_stops_at_previous_clip() {
     let mut fx = Fx::new();
     let v1 = fx.v(0);

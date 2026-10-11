@@ -247,6 +247,15 @@ fn track_mut(seq: &mut Sequence, id: TrackId) -> Result<&mut Track> {
     seq.track_mut(id).ok_or(EditError::NoTrack(id))
 }
 
+/// The clip's track, or [`EditError::Locked`] when that track may not change.
+fn unlocked_track(seq: &Sequence, clip: ClipId) -> Result<TrackId> {
+    let (tid, _) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
+    if seq.track(tid).ok_or(EditError::NoTrack(tid))?.locked {
+        return Err(EditError::Locked);
+    }
+    Ok(tid)
+}
+
 /// Overwrite edits: each item replaces material on its track.
 pub fn overwrite(seq: &mut Sequence, placements: Vec<(TrackId, TrackItem)>, ctx: &mut EditCtx) -> Result<Vec<ClipId>> {
     let mut links = HashMap::new();
@@ -633,7 +642,8 @@ fn neighbours(track: &Track, id: ClipId) -> (Tick, Tick) {
 
 /// Compute the clamped delta a trim may apply (for UI feedback while dragging).
 pub fn clamp_trim(seq: &Sequence, clip: ClipId, edge: Edge, mode: TrimMode, delta: Tick, ctx: &EditCtx) -> Result<Tick> {
-    let (tid, it) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
+    let tid = unlocked_track(seq, clip)?;
+    let (_, it) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
     let tr = seq.track(tid).ok_or(EditError::NoTrack(tid))?;
     let (prev_end, next_start) = neighbours(tr, clip);
     let media = media_len(ctx, it);
@@ -703,6 +713,7 @@ pub fn move_edge(it: &mut TrackItem, edge: Edge, d: Tick, move_start: bool) {
 /// Trim one edge of an item (Selection-tool edge drag = Regular; Ripple tool = Ripple).
 /// Linked partners should be trimmed by the caller with the same delta.
 pub fn trim(seq: &mut Sequence, clip: ClipId, edge: Edge, mode: TrimMode, delta: Tick, ctx: &mut EditCtx) -> Result<Tick> {
+    unlocked_track(seq, clip)?;
     let d = clamp_trim(seq, clip, edge, mode, delta, ctx)?;
     if d == Tick::ZERO {
         return Ok(d);
@@ -759,6 +770,9 @@ pub fn trim(seq: &mut Sequence, clip: ClipId, edge: Edge, mode: TrimMode, delta:
 /// overwrite material on a sync-locked track, or when such a linked clip has no room to follow.
 pub fn ripple_trim_group(seq: &mut Sequence, clips: &[ClipId], edge: Edge, delta: Tick, ctx: &mut EditCtx) -> Result<Tick> {
     let Some(&first) = clips.first() else { return Ok(Tick::ZERO) };
+    for c in clips {
+        unlocked_track(seq, *c)?;
+    }
     let mut d = delta;
     for c in clips {
         let x = clamp_trim(seq, *c, edge, TrimMode::Ripple, d, ctx)?;
@@ -861,6 +875,8 @@ pub fn ripple_trim_group(seq: &mut Sequence, clips: &[ClipId], edge: Edge, delta
 
 /// Rolling edit between two adjacent items on one track: moves the cut by `delta`.
 pub fn roll(seq: &mut Sequence, left: ClipId, right: ClipId, delta: Tick, ctx: &mut EditCtx) -> Result<Tick> {
+    unlocked_track(seq, left)?;
+    unlocked_track(seq, right)?;
     let (_, l) = seq.find_item(left).ok_or(EditError::NoItem(left))?;
     let (_, r) = seq.find_item(right).ok_or(EditError::NoItem(right))?;
     if l.end() != r.start {
@@ -908,6 +924,7 @@ pub fn roll(seq: &mut Sequence, left: ClipId, right: ClipId, delta: Tick, ctx: &
 
 /// Slip: change which part of the media an item shows without moving it.
 pub fn slip(seq: &mut Sequence, clip: ClipId, delta_media: Tick, ctx: &mut EditCtx) -> Result<Tick> {
+    unlocked_track(seq, clip)?;
     let (_, it) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
     let used = src_of(it.duration, it.speed);
     let max_in = media_len(ctx, it).map(|m| m - used).unwrap_or(Tick::MAX);
@@ -921,6 +938,7 @@ pub fn slip(seq: &mut Sequence, clip: ClipId, delta_media: Tick, ctx: &mut EditC
 
 /// Slide: move an item between its neighbours, trimming them to keep the gapless span.
 pub fn slide(seq: &mut Sequence, clip: ClipId, delta: Tick, ctx: &mut EditCtx) -> Result<Tick> {
+    unlocked_track(seq, clip)?;
     let (tid, it) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
     let it = it.clone();
     let tr = seq.track(tid).ok_or(EditError::NoTrack(tid))?;
@@ -1001,6 +1019,7 @@ pub fn slide_items(seq: &mut Sequence, clips: &[ClipId], delta: Tick, ctx: &mut 
 
 /// Rate stretch: change an item's duration by dragging an edge, adjusting speed to keep the same media.
 pub fn rate_stretch(seq: &mut Sequence, clip: ClipId, edge: Edge, delta: Tick, ctx: &mut EditCtx) -> Result<f64> {
+    unlocked_track(seq, clip)?;
     let (tid, it) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
     let tr = seq.track(tid).ok_or(EditError::NoTrack(tid))?;
     let (prev_end, next_start) = neighbours(tr, clip);
@@ -1037,6 +1056,9 @@ pub fn set_speed(seq: &mut Sequence, clip: ClipId, speed: f64, reverse: bool, ri
 pub fn set_speed_group(seq: &mut Sequence, clips: &[ClipId], speed: f64, reverse: bool, ripple: bool, ctx: &mut EditCtx) -> Result<()> {
     if !(speed.is_finite() && speed > 0.0) {
         return Err(EditError::Other("speed must be positive".into()));
+    }
+    for clip in clips {
+        unlocked_track(seq, *clip)?;
     }
     let mut work = seq.clone();
     // per member track: where its later material starts, and by how much the member's length changed
