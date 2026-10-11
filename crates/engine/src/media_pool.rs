@@ -444,7 +444,7 @@ impl MediaSource for ProxySource {
             return Ok(f);
         }
         // different aspect: resample (nearest) to the original's aspect at the proxy's width
-        let src = f.to_rgba8();
+        let src = f.to_rgba8().map_err(MediaError::Decode)?;
         let (w, h) = (f.width as usize, want_h.max(1) as usize);
         let mut out = vec![0u8; w * h * 4];
         for y in 0..h {
@@ -578,12 +578,12 @@ mod tests {
         pool.insert_file(item, "/media/cam/a.mov", Arc::new(PartlyDecodable(info)));
         let src = pool.cached(item).unwrap();
         let at = |t| src.video_frame(FrameRequest { time: filmcraft_time::Tick(t), scale: 1.0 });
-        assert_eq!(at(0).unwrap().to_rgba8(), vec![7; 16]);
+        assert_eq!(at(0).unwrap().to_rgba8().unwrap(), vec![7; 16]);
         assert!(matches!(at(1), Err(MediaError::Decode(_))));
         assert!(pool.offline_status(item).is_none(), "nothing unsupported yet");
         let f = at(2).unwrap();
         assert_eq!((f.width, f.height), (16, 8));
-        assert_eq!(f.to_rgba8(), filmcraft_render::offline::slate_rgba8(16, 8, "a.mov", OfflineReason::Unreadable));
+        assert_eq!(f.to_rgba8().unwrap(), filmcraft_render::offline::slate_rgba8(16, 8, "a.mov", OfflineReason::Unreadable));
         let st = pool.offline_status(item).unwrap();
         assert_eq!((st.reason, st.path.as_str(), st.error.as_str()), (OfflineReason::Unreadable, "/media/cam/a.mov", "H.264: field pictures"));
         assert_eq!(src.audio(0, 4, 48_000).unwrap().channels.len(), 3);
@@ -613,7 +613,7 @@ mod tests {
         let item = ItemId(r["items"][0].as_u64().unwrap());
         let src = s.media.source_for(&s.project, item, &*s.services).unwrap();
         let f = src.video_frame(FrameRequest { time: filmcraft_time::Tick::ZERO, scale: 1.0 }).unwrap();
-        assert_eq!(f.to_rgba8(), filmcraft_render::offline::slate_rgba8(64, 32, "h264_444_64x32.mp4", OfflineReason::Unreadable));
+        assert_eq!(f.to_rgba8().unwrap(), filmcraft_render::offline::slate_rgba8(64, 32, "h264_444_64x32.mp4", OfflineReason::Unreadable));
         let st = s.media.offline_status(item).unwrap();
         assert_eq!(st.reason, OfflineReason::Unreadable);
         assert!(st.error.contains("H.264") && st.error.contains("chroma_format_idc 3"), "{}", st.error);
