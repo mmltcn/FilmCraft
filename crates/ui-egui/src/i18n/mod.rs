@@ -484,6 +484,38 @@ mod tests {
         assert!(missing.is_empty(), "untranslated Chinese strings: {missing:#?}");
     }
 
+    /// The Japanese catalog is complete: every menu label, every `tl!` literal and every name the
+    /// interface translates through `i18n::t`.
+    #[test]
+    fn japanese_translates_every_menu_label_tl_literal_and_name() {
+        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
+        let mut missing: Vec<String> = Vec::new();
+        let mut need = |text: &str| {
+            if translatable(text) && !Language::Ja.has(text) && !missing.iter().any(|m| m == text) {
+                missing.push(text.to_string());
+            }
+        };
+        for top in crate::menus::MENUS {
+            need(top);
+        }
+        for it in crate::menus::menu_items(&app) {
+            need(&it.label);
+            for p in &it.path {
+                need(p);
+            }
+        }
+        for (_, text) in sources() {
+            for lit in tl_literals(&text) {
+                need(&lit);
+            }
+        }
+        for name in dynamic_names() {
+            need(&name);
+        }
+        missing.sort();
+        assert!(missing.is_empty(), "untranslated Japanese strings: {missing:#?}");
+    }
+
     /// Chinese switches and persists like the other languages when a Chinese face is available,
     /// and is refused (the interface stays as it was) without one.
     #[test]
