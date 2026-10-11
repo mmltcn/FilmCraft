@@ -103,7 +103,9 @@ impl Encoder {
 
         let sb_cols = self.config.width.div_ceil(64);
         let sb_rows = self.config.height.div_ceil(64);
-        let mut sym = symbol::SymbolEncoder::new();
+        let total_sbs = (sb_cols as usize).saturating_mul(sb_rows as usize);
+        // Pre-allocate stream memory: approx 2-4 bytes per superblock
+        let mut sym = symbol::SymbolEncoder::with_capacity(total_sbs.saturating_mul(4).max(64));
 
         for r in 0..sb_rows {
             for c in 0..sb_cols {

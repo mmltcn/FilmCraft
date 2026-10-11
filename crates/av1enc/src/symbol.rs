@@ -35,21 +35,29 @@ impl Default for SymbolEncoder {
 
 impl SymbolEncoder {
     pub fn new() -> Self {
+        Self::with_capacity(64)
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        let cap = capacity.max(8);
+        let mut stream = Vec::with_capacity(cap);
+        stream.resize(8, 0);
         Self {
             range: 1 << 15,
             bit_pos: 0,
-            stream: vec![0; 8], // Initial buffer for sliding additions
+            stream,
         }
     }
 
     /// Write a boolean with probability P(0) = 0.5 (equal probability).
-    #[inline]
+    #[inline(always)]
     pub fn write_bool(&mut self, val: bool) {
         let mut cdf = [1u16 << 14, 1 << 15, 0];
         self.write_symbol(val as usize, &mut cdf);
     }
 
     /// Write literal n bits.
+    #[inline]
     pub fn write_literal(&mut self, val: u32, n: u32) {
         for i in (0..n).rev() {
             let bit = (val >> i) & 1 != 0;
@@ -58,18 +66,21 @@ impl SymbolEncoder {
     }
 
     /// Write a symbol with a CDF (N+1 entries). Adapts CDF if update is true.
+    #[inline]
     pub fn write_symbol(&mut self, symbol: usize, cdf: &mut [u16]) {
-        let n = cdf.len() - 1;
+        let n = cdf.len().saturating_sub(1);
         self.encode_symbol(symbol, cdf, n);
         crate::symbol::update_cdf(cdf, n, symbol);
     }
 
     /// Write a symbol with a static / non-adapting CDF.
+    #[inline(always)]
     pub fn write_symbol_no_update(&mut self, symbol: usize, cdf: &[u16]) {
-        let n = cdf.len() - 1;
+        let n = cdf.len().saturating_sub(1);
         self.encode_symbol(symbol, cdf, n);
     }
 
+    #[inline(always)]
     fn encode_symbol(&mut self, symbol: usize, cdf: &[u16], n: usize) {
         let cur_range = self.range;
         let fl = if symbol == 0 { 1u32 << 15 } else { (1u32 << 15) - cdf[symbol - 1] as u32 };
