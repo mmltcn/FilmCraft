@@ -591,6 +591,11 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
         "graphics.template.install" if params.get("path").is_none() => {
             let path = app.hooks.pick_open_file.as_mut().and_then(|f| f(tl!("FilmCraft Graphics Template"), &["fcgt"]))?;
             let r = app.session.execute(id, json!({"path": path})).map_err(|e| e.to_string());
+            // The Browse panel's Install… button calls this directly and drops the result
+            // (#611); report a refused file here, so every caller shows why nothing happened.
+            if let Err(e) = &r {
+                app.ui.status = e.clone();
+            }
             invalidate(ctx);
             Some(r)
         }
