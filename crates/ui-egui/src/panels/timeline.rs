@@ -606,6 +606,30 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
 }
 
 fn empty_state(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+    // OS drops are imported by handle_drops before this panel draws. With no active
+    // sequence there are no track rows for interact() to consume the pending drop,
+    // so honour the empty-state hint by creating a sequence from the first item.
+    if let Some((items, pos)) = app.pending_timeline_drop.clone()
+        && rect.contains(pos)
+        && let Some(&first) = items.first()
+    {
+        app.pending_timeline_drop = None;
+        match app.session.execute("file.newSequence", json!({"fromItem": first.0})) {
+            Ok(_) => {
+                // Other files in the same OS drop go after the first, rather than
+                // being silently imported to the bin without reaching the timeline.
+                for item in items.iter().skip(1) {
+                    let end = app.session.active_sequence().map(|s| s.duration()).unwrap_or(Tick::ZERO);
+                    if let Err(e) = app.session.execute("timeline.place", json!({"item": item.0, "time": end.0, "insert": false})) {
+                        app.ui.status = e.to_string();
+                        break;
+                    }
+                }
+            }
+            Err(e) => app.ui.status = e.to_string(),
+        }
+        return;
+    }
     let t = app.tokens;
     ui.painter().text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, tl!("Drop media here to create sequence."), Tokens::ui(13.0), t.text_dim);
     if app.session.project.items.values().any(|i| matches!(i.kind, filmcraft_project::ItemKind::Sequence(_))) {

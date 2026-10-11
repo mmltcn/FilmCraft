@@ -18,6 +18,15 @@ fn step(h: &mut Harness<'static, FilmcraftApp>) {
     h.step();
 }
 
+fn empty_harness() -> Harness<'static, FilmcraftApp> {
+    let s = Session::default();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).build_eframe(move |_cc| FilmcraftApp::new(s));
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    h
+}
+
 fn harness() -> Harness<'static, FilmcraftApp> {
     let mut s = Session::default();
     s.execute("file.openDemoProject", json!({})).unwrap();
@@ -116,6 +125,21 @@ fn tone(name: &str) -> PathBuf {
     wav.extend_from_slice(&data);
     std::fs::write(&p, wav).unwrap();
     p
+}
+
+#[test]
+fn os_file_dropped_on_empty_timeline_creates_sequence_with_media() {
+    let mut h = empty_harness();
+    assert!(h.state().session.active_sequence().is_none());
+    let pos = control_rect(&h, "panel.Timeline").center();
+    pointer_to(&mut h, pos);
+    let path = tone("drop_empty_timeline.wav");
+    h.input_mut().dropped_files.push(std::sync::Arc::new(OsFile(path)));
+    step(&mut h);
+    h.input_mut().dropped_files.clear();
+    step(&mut h);
+    assert!(h.state().session.active_sequence().is_some(), "status: {}", h.state().ui.status);
+    assert_eq!(clip_counts(&h), (0, 1), "the imported clip must be placed on A1");
 }
 
 #[test]
