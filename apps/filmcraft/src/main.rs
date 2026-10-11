@@ -227,11 +227,15 @@ fn main() -> eframe::Result {
                     .map(|p| p.to_string_lossy().to_string())
             }));
             app.hooks.pick_save_as = Some(Box::new(|filter: &str, exts: &[&str], name: &str| {
-                rfd::FileDialog::new()
+                // a full path (Quick Export, Export mode) opens the dialog in its folder
+                let path = std::path::Path::new(name);
+                let mut dialog = rfd::FileDialog::new()
                     .add_filter(filmcraft_ui_egui::i18n::t(filter), &file_filters::extensions(exts))
-                    .set_file_name(name)
-                    .save_file()
-                    .map(|p| p.to_string_lossy().to_string())
+                    .set_file_name(path.file_name().map_or(name.into(), |n| n.to_string_lossy()));
+                if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
+                    dialog = dialog.set_directory(dir);
+                }
+                dialog.save_file().map(|p| p.to_string_lossy().to_string())
             }));
             app.hooks.pick_folder = Some(Box::new(|| rfd::FileDialog::new().pick_folder().map(|p| p.to_string_lossy().to_string())));
             app.hooks.pick_folder_at =
