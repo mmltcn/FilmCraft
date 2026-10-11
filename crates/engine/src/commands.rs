@@ -2454,13 +2454,7 @@ fn build() -> Vec<CommandSpec> {
                 .or_else(|| p.get("deltaFrames").and_then(Value::as_i64).map(|f| s.sequence_rate().tick_of(f)))
                 .unwrap_or_default();
             let clips = with_links(s, &[c]);
-            let sp = s.edit_sequence("Rate Stretch", |q, ctx, _| {
-                let mut sp = 1.0;
-                for c in &clips {
-                    sp = edit::rate_stretch(q, *c, edge, d, ctx)?;
-                }
-                Ok(sp)
-            })?;
+            let sp = s.edit_sequence("Rate Stretch", |q, ctx, _| Ok(edit::rate_stretch_items(q, &clips, edge, d, ctx)?))?;
             Ok(json!({"speed": sp}))
         }),
         cmd!("timeline.razor", "Razor", [], None, r#"{"time":ticks,"track":"V1"|id?,"clip":id?}"#, has_seq, |s, p| {

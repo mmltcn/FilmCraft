@@ -538,6 +538,29 @@ fn rate_stretch_and_speed() {
 }
 
 #[test]
+fn linked_rate_stretch_uses_the_tighter_neighbour() {
+    // picture and sound are 60 frames; a later clip on A1 starts at 70, so the sound has only 10
+    // frames of room. Stretching the pair +20 must not leave the picture at 80f / 0.75x and the
+    // sound at 70f / 6/7x while still linked.
+    let mut fx = Fx::new();
+    let (v1, a1) = (fx.v(0), fx.a(0));
+    let pic = fx.put(v1, 0, 60, 0);
+    let snd = fx.put(a1, 0, 60, 0);
+    fx.put(a1, 70, 10, 0);
+    for c in [pic, snd] {
+        fx.seq.find_item_mut(c).unwrap().1.link = Some(1);
+    }
+    let mut n = fx.next;
+    let speed = rate_stretch_items(&mut fx.seq, &[pic, snd], Edge::Out, f(20), &mut Fx::ctx(&mut n)).unwrap();
+    assert!((speed - 60.0 / 70.0).abs() < 1e-9);
+    let (p, s) = (fx.seq.find_item(pic).unwrap().1, fx.seq.find_item(snd).unwrap().1);
+    assert_eq!((R.frame_at(p.duration), R.frame_at(s.duration)), (70, 70));
+    assert!((p.speed - s.speed).abs() < 1e-12);
+    assert_eq!(fx.spans(a1), vec![(0, 70), (70, 10)]);
+    fx.seq.check().unwrap();
+}
+
+#[test]
 fn speed_on_a_linked_group_ripples_once() {
     // V1: a [0,10), b [10,20). A1: a's sound [0,10), b's sound [10,20).
     let build = |sound_len: i64| {

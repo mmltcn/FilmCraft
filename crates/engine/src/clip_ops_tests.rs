@@ -988,3 +988,25 @@ fn keyboard_slip_keeps_linked_clips_in_sync_past_the_shorter_handle() {
     s.execute("timeline.slipLeft5", json!({})).unwrap();
     assert_eq!((clip(&s, v).source_in, clip(&s, a).source_in), (Tick(fr.0 * 30), Tick(fr.0 * 35)));
 }
+
+#[test]
+fn linked_rate_stretch_keeps_one_speed_when_a_neighbour_blocks_the_sound() {
+    let mut s = Session::default();
+    s.execute("file.newProject", json!({"name": "Stretch"})).unwrap();
+    s.execute("file.newSequence", json!({"name": "Sequence", "fps": 25, "video": 1, "audio": 1, "width": 16, "height": 16})).unwrap();
+    let r = s.execute("file.newOfflineFile", json!({"name": "A", "seconds": 8, "fps": 25, "video": true, "audio": true})).unwrap();
+    let a = r["item"].as_u64().unwrap();
+    let r = s.execute("file.newOfflineFile", json!({"name": "B", "seconds": 2, "fps": 25, "video": true, "audio": true})).unwrap();
+    let b = r["item"].as_u64().unwrap();
+    let fr = s.sequence_rate().tick_of(1);
+    let r = s.execute("timeline.place", json!({"item": a, "track": "V1", "audioTrack": "A1", "time": 0, "duration": fr.0 * 60})).unwrap();
+    let (v, snd) = (r["clips"][0].as_u64().unwrap(), r["clips"][1].as_u64().unwrap());
+    s.execute("sequence.linkedSelection", json!({"on": false})).unwrap();
+    s.execute("timeline.place", json!({"item": b, "track": "A1", "time": fr.0 * 70, "duration": fr.0 * 10})).unwrap();
+    s.execute("sequence.linkedSelection", json!({"on": true})).unwrap();
+    let r = s.execute("timeline.rateStretch", json!({"clip": v, "edge": "out", "deltaFrames": 20})).unwrap();
+    let (pic, sound) = (clip(&s, v), clip(&s, snd));
+    assert_eq!((pic.duration, sound.duration), (Tick(fr.0 * 70), Tick(fr.0 * 70)));
+    assert!((pic.speed - sound.speed).abs() < 1e-12);
+    assert!((r["speed"].as_f64().unwrap() - 60.0 / 70.0).abs() < 1e-9);
+}

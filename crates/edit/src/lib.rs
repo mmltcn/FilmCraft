@@ -999,27 +999,52 @@ pub fn slide_items(seq: &mut Sequence, clips: &[ClipId], delta: Tick, ctx: &mut 
     Ok(d)
 }
 
-/// Rate stretch: change an item's duration by dragging an edge, adjusting speed to keep the same media.
-pub fn rate_stretch(seq: &mut Sequence, clip: ClipId, edge: Edge, delta: Tick, ctx: &mut EditCtx) -> Result<f64> {
+/// How far `clip` can rate-stretch on `edge` without overlapping a neighbour or going shorter than
+/// one frame. Linked partners use this so they all take the tightest room.
+pub fn clamp_rate_stretch(seq: &Sequence, clip: ClipId, edge: Edge, delta: Tick, ctx: &EditCtx) -> Result<Tick> {
     let (tid, it) = seq.find_item(clip).ok_or(EditError::NoItem(clip))?;
     let tr = seq.track(tid).ok_or(EditError::NoTrack(tid))?;
     let (prev_end, next_start) = neighbours(tr, clip);
-    let src_len = it.source_out() - it.source_in;
-    let d = match edge {
+    Ok(match edge {
         Edge::Out => delta.clamp(-(it.duration - ctx.min_duration), next_start - it.end()),
         Edge::In => delta.clamp(-(it.start - prev_end), it.duration - ctx.min_duration),
-    };
-    let new_dur = match edge {
-        Edge::Out => it.duration + d,
-        Edge::In => it.duration - d,
-    };
-    let speed = src_len.0 as f64 / new_dur.0 as f64;
-    let (_, it) = seq.find_item_mut(clip).ok_or(EditError::NoItem(clip))?;
-    if edge == Edge::In {
-        it.start += d;
+    })
+}
+
+/// Rate stretch: change an item's duration by dragging an edge, adjusting speed to keep the same media.
+pub fn rate_stretch(seq: &mut Sequence, clip: ClipId, edge: Edge, delta: Tick, ctx: &mut EditCtx) -> Result<f64> {
+    rate_stretch_items(seq, &[clip], edge, delta, ctx)
+}
+
+/// Rate stretch a clip and its linked partners as one edit: the tightest neighbour on any member
+/// clamps them all, so they keep one speed. A neighbour on the sound track cannot leave the picture
+/// stretching further (and the pair still linked at different rates).
+pub fn rate_stretch_items(seq: &mut Sequence, clips: &[ClipId], edge: Edge, delta: Tick, ctx: &mut EditCtx) -> Result<f64> {
+    let mut d = delta;
+    for c in clips {
+        let x = clamp_rate_stretch(seq, *c, edge, d, ctx)?;
+        if x.0.signum() != d.0.signum() {
+            d = Tick::ZERO;
+        } else if x.abs() < d.abs() {
+            d = x;
+        }
     }
-    it.duration = new_dur;
-    it.speed = speed;
+    let mut speed = 1.0;
+    for c in clips {
+        let (_, it) = seq.find_item(*c).ok_or(EditError::NoItem(*c))?;
+        let src_len = it.source_out() - it.source_in;
+        let new_dur = match edge {
+            Edge::Out => it.duration + d,
+            Edge::In => it.duration - d,
+        };
+        speed = src_len.0 as f64 / new_dur.0 as f64;
+        let (_, it) = seq.find_item_mut(*c).ok_or(EditError::NoItem(*c))?;
+        if edge == Edge::In {
+            it.start += d;
+        }
+        it.duration = new_dur;
+        it.speed = speed;
+    }
     Ok(speed)
 }
 
