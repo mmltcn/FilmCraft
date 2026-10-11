@@ -411,6 +411,47 @@ pub(crate) fn slip_together(q: &mut filmcraft_project::Sequence, ctx: &mut edit:
     Ok(())
 }
 
+/// Adjacent roll pairs that follow `left`/`right` when linked selection is on: the given cut, plus
+/// through-edits between the same pieces' linked partners at that same time (Premiere linked
+/// selection). Split edits (audio cut at another time) and unlinked clips are not added.
+pub fn linked_roll_pairs(seq: &filmcraft_project::Sequence, left: ClipId, right: ClipId, follow_links: bool) -> Vec<(ClipId, ClipId)> {
+    let mut pairs = vec![(left, right)];
+    if !follow_links {
+        return pairs;
+    }
+    let Some((_, l)) = seq.find_item(left) else {
+        return pairs;
+    };
+    let Some((_, r)) = seq.find_item(right) else {
+        return pairs;
+    };
+    let cut = l.end();
+    let left_link = l.link;
+    let right_link = r.link;
+    if left_link.is_none() && right_link.is_none() {
+        return pairs;
+    }
+    for tr in seq.all_tracks() {
+        if tr.locked {
+            continue;
+        }
+        for w in tr.items.windows(2) {
+            if w[0].id == left && w[1].id == right {
+                continue;
+            }
+            if w[0].end() != w[1].start || w[0].end() != cut {
+                continue;
+            }
+            let left_ok = left_link.is_some_and(|g| w[0].link == Some(g));
+            let right_ok = right_link.is_some_and(|g| w[1].link == Some(g));
+            if left_ok && right_ok {
+                pairs.push((w[0].id, w[1].id));
+            }
+        }
+    }
+    pairs
+}
+
 /// Expand a clip selection with linked partners (when linked selection is on).
 pub fn with_links(s: &Session, clips: &[ClipId]) -> Vec<ClipId> {
     let Some(seq) = s.active_sequence() else { return clips.to_vec() };
@@ -2412,8 +2453,26 @@ fn build() -> Vec<CommandSpec> {
                 .map(Tick)
                 .or_else(|| p.get("deltaFrames").and_then(Value::as_i64).map(|f| s.sequence_rate().tick_of(f)))
                 .unwrap_or_default();
-            let x = s.edit_sequence("Rolling Edit", |q, ctx, _| Ok(edit::roll(q, l, r, d, ctx)?))?;
-            Ok(json!({"delta": x.0}))
+            let follow = s.state.linked_selection;
+            let (x, n, linked) = s.edit_sequence("Rolling Edit", |q, ctx, _| {
+                let pairs = linked_roll_pairs(q, l, r, follow);
+                let linked = pairs.len() > 1;
+                let mut d = d;
+                for &(pl, pr) in &pairs {
+                    let mut probe = q.clone();
+                    let x = edit::roll(&mut probe, pl, pr, d, ctx)?;
+                    if x.abs() < d.abs() {
+                        d = x;
+                    }
+                }
+                if d != Tick::ZERO {
+                    for &(pl, pr) in &pairs {
+                        edit::roll(q, pl, pr, d, ctx)?;
+                    }
+                }
+                Ok((d, pairs.len(), linked))
+            })?;
+            Ok(json!({"delta": x.0, "pairs": n, "linked": linked}))
         }),
         cmd!("timeline.slip", "Slip", [], None, r#"{"clip":id,"delta":ticks|"deltaFrames":i64}"#, has_seq, |s, p| {
             let c = clip_p(p, "clip").ok_or_else(|| bad("timeline.slip", "need `clip`"))?;

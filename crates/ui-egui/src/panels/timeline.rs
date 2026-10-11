@@ -1680,11 +1680,14 @@ fn preview_drag(app: &FilmcraftApp, seq: &Sequence, out: &mut HashMap<ClipId, (T
             }
         }
         Drag::Roll { left, right, delta, .. } => {
-            if let Some((_, l)) = seq.find_item(*left) {
-                moved(l, filmcraft_edit::Edge::Out, *delta);
-            }
-            if let Some((_, r)) = seq.find_item(*right) {
-                moved(r, filmcraft_edit::Edge::In, *delta);
+            let pairs = filmcraft_engine::commands::linked_roll_pairs(seq, *left, *right, app.session.state.linked_selection);
+            for (pl, pr) in pairs {
+                if let Some((_, l)) = seq.find_item(pl) {
+                    moved(l, filmcraft_edit::Edge::Out, *delta);
+                }
+                if let Some((_, r)) = seq.find_item(pr) {
+                    moved(r, filmcraft_edit::Edge::In, *delta);
+                }
             }
         }
         Drag::Slide { clip, delta } => {
