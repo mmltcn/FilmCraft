@@ -3,8 +3,9 @@
 //!
 //! Supported: `project`/`bin`/`clip`/`sequence` structure, video and audio tracks (enabled,
 //! locked), `clipitem` (start/end/in/out, `pproTicksIn/Out` for tick-exact source times, enabled,
-//! labels, markers, links), `file` (pathurl, rate, duration, timecode, media characteristics,
-//! references by id), nested sequences (inline or by id), `generatoritem` (Slug, Color, …),
+//! labels, markers, links), master-clip `<clip>` media markers, `file` (pathurl, rate, duration,
+//! timecode, media characteristics, references by id), nested sequences (inline or by id),
+//! `generatoritem` (Slug, Color, …),
 //! `transitionitem` (alignment, Cross Dissolve & friends), and the filters Basic Motion (scale,
 //! rotation, center, anchor, anti-flicker), Opacity, Time Remap (constant speed, reverse, freeze),
 //! Audio Levels and Audio Pan, all with keyframes. Other effects are written with our effect ids
@@ -803,6 +804,7 @@ pub(crate) fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: 
     };
     let v = if opts.xmeml_version == 5 { "5" } else { "4" };
     x.w.open("xmeml", &[("version", v)]);
+    x.write_master_clips(seq_id);
     x.write_sequence(seq_id, true);
     x.w.close();
     Ok(x.w.finish())
@@ -949,6 +951,57 @@ impl Exp<'_, '_> {
     fn master_id(&mut self, item: ItemId) -> String {
         let n = self.master_ids.len() + 1;
         self.master_ids.entry(item).or_insert_with(|| format!("masterclip-{n}")).clone()
+    }
+
+    /// Source-media (master clip) markers live on `<clip>`, not on timeline `<clipitem>`s.
+    fn write_master_clips(&mut self, seq_id: ItemId) {
+        let mut seen = HashSet::new();
+        let mut items = Vec::new();
+        self.collect_file_media(seq_id, &mut seen, &mut items);
+        for item in items {
+            let Some(m) = item_media(self.p, item) else { continue };
+            if m.markers.is_empty() {
+                continue;
+            }
+            let rate = m
+                .info
+                .video
+                .as_ref()
+                .map(|v| m.interpret.frame_rate.unwrap_or(v.frame_rate))
+                .unwrap_or_else(|| self.p.sequence(seq_id).map(|s| s.settings.frame_rate).unwrap_or_default());
+            let name = self.p.item(item).map(|i| i.name.clone()).unwrap_or_default();
+            let label = self.p.item(item).map(|i| i.label).unwrap_or(Label::Iris);
+            let duration = m.info.duration;
+            let markers = m.markers.clone();
+            let mid = self.master_id(item);
+            self.w.open("clip", &[("id", &mid)]);
+            self.w.text("name", name);
+            self.w.text("duration", frames_round(rate, duration));
+            write_rate(&mut self.w, rate);
+            self.w.open("labels", &[]);
+            self.w.text("label2", label.name());
+            self.w.close();
+            self.write_file(item, rate);
+            write_markers(&mut self.w, &markers, rate);
+            self.w.close();
+        }
+    }
+
+    fn collect_file_media(&self, seq: ItemId, seen: &mut HashSet<ItemId>, out: &mut Vec<ItemId>) {
+        if !seen.insert(seq) {
+            return;
+        }
+        let Some(s) = self.p.sequence(seq) else { return };
+        for t in s.all_tracks() {
+            for c in &t.items {
+                let base = base_item(self.p, c.item);
+                match self.p.item(base).map(|i| &i.kind) {
+                    Some(ItemKind::Sequence(_)) => self.collect_file_media(base, seen, out),
+                    Some(ItemKind::Media(_)) if crate::common::generator_of(self.p, base).is_none() && !out.contains(&base) => out.push(base),
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn write_clip(&mut self, c: &TrackItem, kind: TrackKind, seq: &Sequence, xid: &str, links: &[(String, TrackKind, usize, usize)]) {
