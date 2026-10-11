@@ -402,8 +402,10 @@ fn style_strip(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, track_idx: us
             // names starting with '.' are macOS-private system faces (UI/fallback fonts, some without a space glyph)
             for (f, _) in filmcraft_text::families().into_iter().filter(|(f, _)| !f.starts_with('.')) {
                 let resp = ui.selectable_label(f.eq_ignore_ascii_case(&st.font), &f);
-                if ui.is_rect_visible(resp.rect) {
-                    app.auto.add(&format!("text.captions.style.font.option.{f}"), resp.rect, &f);
+                // An edge row may be only partly visible; automation must click its visible portion.
+                let visible = resp.rect.intersect(ui.clip_rect());
+                if visible.is_positive() {
+                    app.auto.add(&format!("text.captions.style.font.option.{f}"), visible, &f);
                 }
                 if resp.clicked() {
                     actions.push(("captions.setStyle".into(), json!({"track": tr.id.0, "font": f})));

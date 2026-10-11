@@ -126,8 +126,14 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("gamma_correction", vec![("gamma", fl(-3.0))], false),
         ("levels", vec![("in_black", fl(20.0)), ("in_white", fl(230.0)), ("out_black", fl(10.0)), ("out_white", fl(240.0)), ("gamma", fl(150.0))], false),
         ("levels", vec![("in_black", fl(200.0)), ("in_white", fl(0.0)), ("gamma", fl(5.0)), ("out_white", fl(-50.0))], true),
+        ("extract", vec![], true),
+        ("extract", vec![("invert", ParamValue::Bool(true))], true),
         ("extract", vec![("black", fl(40.0)), ("white", fl(200.0)), ("softness", fl(30.0))], true),
         ("extract", vec![("black", fl(90.0)), ("white", fl(160.0)), ("invert", ParamValue::Bool(true))], true),
+        ("extract", vec![("black", fl(90.0)), ("white", fl(160.0)), ("softness", fl(1.0))], true),
+        ("extract", vec![("black", fl(40.0)), ("white", fl(200.0)), ("softness", fl(100.0))], true),
+        ("extract", vec![("black", fl(160.0)), ("white", fl(90.0))], true),
+        ("extract", vec![("black", fl(90.0)), ("white", fl(90.0))], true),
         ("invert", vec![("blend", fl(30.0))], false),
         ("invert", vec![("channel", ParamValue::Choice(1))], false),
         ("invert", vec![("channel", ParamValue::Choice(2)), ("blend", fl(70.0))], false),
@@ -327,6 +333,34 @@ fn gpu_effects_match_cpu_exactly() {
         }
     }
     assert!(failures.is_empty(), "GPU effects differ from the CPU:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn gpu_extract_zero_softness_has_no_fractional_edge() {
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut c = GpuCompositor::new(&dev, &q);
+    let (w, h) = (67, 41);
+    let px = picture(w, h);
+    let frame = VideoFrame::rgba_f32(w, h, px.clone());
+    let mut masks = Vec::new();
+    for invert in [false, true] {
+        let e = effect("extract", &[("black", fl(90.0)), ("white", fl(160.0)), ("invert", ParamValue::Bool(invert))]);
+        let op = FxOp::eval(&e, &cx(Tick::ZERO, 1.0), w as usize, h as usize).unwrap();
+        let (_, _, gpu) = c.effect_image(&frame, &LayerFx { size: (w, h), decimation: 1, ops: vec![op] }).unwrap();
+        for (src, out) in px.chunks_exact(4).zip(gpu.chunks_exact(4)) {
+            assert_eq!(out[3], src[3], "Extract must preserve alpha");
+            assert!(out[0] == 0.0 || out[0] == out[3], "zero softness produced a fractional edge: {out:?}");
+            assert_eq!(out[0], out[1]);
+            assert_eq!(out[0], out[2]);
+        }
+        masks.push(gpu);
+    }
+    for ((normal, inverted), src) in masks[0].chunks_exact(4).zip(masks[1].chunks_exact(4)).zip(px.chunks_exact(4)) {
+        assert_eq!(normal[0] + inverted[0], src[3], "inversion must complement the premultiplied mask");
+    }
 }
 
 /// Chains run in order (and Unsharp keeps its original while blurring, between other blurs).
