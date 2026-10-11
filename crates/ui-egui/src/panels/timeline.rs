@@ -151,8 +151,12 @@ pub enum Drag {
     Pan {
         last: Pos2,
     },
+    /// Box selection, shown live: `before` is the selection when the drag began, which Shift or
+    /// Ctrl (`add`) keep; the release commits one `timeline.select`.
     Marquee {
         start: Pos2,
+        before: Vec<ClipId>,
+        add: bool,
     },
     Divider,
     ZoomBar {
@@ -1697,6 +1701,18 @@ fn preview_drag(app: &FilmcraftApp, seq: &Sequence, out: &mut HashMap<ClipId, (T
     }
 }
 
+/// The clips a marquee rectangle touches, on the tracks it crosses.
+fn marquee_clips(seq: &Sequence, layout: &Layout, r: Rect) -> Vec<ClipId> {
+    let (a, b) = (layout.tick_at(r.min.x), layout.tick_at(r.max.x));
+    layout
+        .rows
+        .iter()
+        .filter(|row| row.rect.intersects(r))
+        .filter_map(|row| seq.track(row.track))
+        .flat_map(|tr| tr.items.iter().filter(|i| i.start < b && i.end() > a).map(|i| i.id))
+        .collect()
+}
+
 fn shift_track(seq: &Sequence, tid: TrackId, delta: i32) -> Option<TrackId> {
     if delta == 0 {
         return Some(tid);
@@ -2163,7 +2179,7 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             // the video and audio tracks, #683)
             (_, Grab::Other(hit @ (Hit::Empty { .. } | Hit::None))) if layout.content.contains(p) => {
                 if resp.drag_started() {
-                    Some(Drag::Marquee { start: p })
+                    Some(Drag::Marquee { start: p, before: app.session.state.selection.clone(), add: mods.shift || mods.command })
                 } else {
                     app.session.state.selection.clear();
                     app.session.state.edit_points.clear();
@@ -2278,11 +2294,20 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
                 Some(Drag::Transition { id, edge, from, start, duration })
             }
             Drag::Volume(v) => Some(Drag::Volume(super::timeline_volume::drag(app, ui, seq, layout, v, p.y))),
-            Drag::Marquee { start } => {
+            Drag::Marquee { start, before, add } => {
                 let r = Rect::from_two_pos(start, p);
                 ui.painter().rect_filled(r, 0.0, Color32::from_white_alpha(18));
                 ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_white_alpha(140)), StrokeKind::Inside);
-                Some(Drag::Marquee { start })
+                // the clips in the box are selected as it grows and shrinks; only the release runs
+                // the command, so the drag is one selection change
+                let mut sel = if add { before.clone() } else { Vec::new() };
+                for c in filmcraft_engine::commands::with_links(&app.session, &marquee_clips(seq, layout, r)) {
+                    if !sel.contains(&c) {
+                        sel.push(c);
+                    }
+                }
+                app.session.state.selection = sel;
+                Some(Drag::Marquee { start, before, add })
             }
             other => Some(other),
         };
@@ -2329,20 +2354,15 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
                 let moved = seq.all_tracks().find_map(|tr| tr.transitions.iter().find(|x| x.id == id)).is_some_and(|x| (x.start, x.duration) != (start, duration));
                 moved.then(|| app.session.execute("sequence.setTransition", json!({"transition": id.0, "start": start.0, "duration": duration.0})))
             }
-            Drag::Marquee { start } => {
-                if let Some(end) = resp.interact_pointer_pos() {
-                    let r = Rect::from_two_pos(start, end);
-                    let (a, b) = (layout.tick_at(r.min.x), layout.tick_at(r.max.x));
-                    let ids: Vec<u64> = layout
-                        .rows
-                        .iter()
-                        .filter(|row| row.rect.intersects(r))
-                        .filter_map(|row| seq.track(row.track))
-                        .flat_map(|tr| tr.items.iter().filter(|i| i.start < b && i.end() > a).map(|i| i.id.0))
-                        .collect();
-                    Some(app.session.execute("timeline.select", json!({"clips": ids, "add": mods.shift})))
-                } else {
-                    None
+            Drag::Marquee { start, before, add } => {
+                app.session.state.selection = before;
+                // egui ends a drag on Escape: that cancels the box, as in the Project panel
+                match resp.interact_pointer_pos() {
+                    Some(end) if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) => {
+                        let ids: Vec<u64> = marquee_clips(seq, layout, Rect::from_two_pos(start, end)).iter().map(|c| c.0).collect();
+                        Some(app.session.execute("timeline.select", json!({"clips": ids, "add": add})))
+                    }
+                    _ => None,
                 }
             }
             _ => None,
