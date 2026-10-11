@@ -197,13 +197,21 @@ fn wheel_zooms_about_the_pointer_and_the_middle_button_pans() {
     let area = d.rect("program.picture");
     let centre = (area[0] + area[2] / 2.0, area[1] + area[3] / 2.0);
     let at = (area[0] + area[2] * 0.25, area[1] + area[3] * 0.4);
-    // 50 points up: 1.5 times; the point under the pointer stays under it
-    d.ok("ui.scroll", json!({"x": at.0, "y": at.1, "dx": 0.0, "dy": 50.0}));
+    // one wheel notch (40 points) up: 10% larger; the point under the pointer stays under it
+    d.ok("ui.scroll", json!({"x": at.0, "y": at.1, "dx": 0.0, "dy": 40.0}));
     d.frames(2);
     let p = d.program();
-    assert!((num(&p["zoom"]) - 1.5).abs() < 1e-4, "{p}");
-    let want = ((centre.0 - at.0) * 0.5, (centre.1 - at.1) * 0.5);
+    assert!((num(&p["zoom"]) - 1.1).abs() < 1e-4, "{p}");
+    let want = ((centre.0 - at.0) * 0.1, (centre.1 - at.1) * 0.1);
     assert!((num(&p["pan"][0]) - want.0).abs() < 1.0 && (num(&p["pan"][1]) - want.1).abs() < 1.0, "pan {} for {want:?}", p["pan"]);
+    // a notch down, then up again, comes back to the same zoom
+    d.ok("ui.scroll", json!({"x": at.0, "y": at.1, "dx": 0.0, "dy": -40.0}));
+    d.frames(2);
+    assert!((num(&d.program()["zoom"]) - 1.0).abs() < 1e-4, "{}", d.program());
+    d.ok("ui.scroll", json!({"x": at.0, "y": at.1, "dx": 0.0, "dy": 40.0}));
+    d.frames(2);
+    let p = d.program();
+    assert!((num(&p["zoom"]) - 1.1).abs() < 1e-4, "{p}");
 
     // the middle button drags the picture, whatever the tool
     let (zoom, pan) = (num(&p["zoom"]), [num(&p["pan"][0]), num(&p["pan"][1])]);
@@ -225,7 +233,7 @@ fn wheel_zooms_about_the_pointer_and_the_middle_button_pans() {
 
     // zooming out stops at the menu's smallest level; Fit resets zoom and pan
     for _ in 0..12 {
-        d.ok("ui.scroll", json!({"x": centre.0, "y": centre.1, "dx": 0.0, "dy": -50.0}));
+        d.ok("ui.scroll", json!({"x": centre.0, "y": centre.1, "dx": 0.0, "dy": -200.0}));
     }
     d.frames(2);
     assert!((num(&d.program()["zoom"]) - 0.1).abs() < 1e-6, "stops at 10%");

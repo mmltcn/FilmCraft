@@ -363,9 +363,10 @@ pub fn zoom_pan_input(app: &mut FilmcraftApp, ui: &mut egui::Ui, w: Which, area:
     if ui.rect_contains_pointer(area)
         && let Some(p) = ctx.pointer_hover_pos()
     {
-        // as fast as the Timeline's own wheel zoom
+        // about 10% per wheel notch (40 points), exponential in the wheel travel so a notch out
+        // undoes a notch in exactly
         let wheel = crate::panels::timeline::wheel_input(&ctx);
-        let f = if (wheel.pinch - 1.0).abs() > 1e-4 { wheel.pinch } else { (1.0 + wheel.delta.y * 0.01).clamp(0.5, 2.0) };
+        let f = if (wheel.pinch - 1.0).abs() > 1e-4 { wheel.pinch } else { (wheel.delta.y * 1.1_f32.ln() / 40.0).exp().clamp(0.5, 2.0) };
         if (f - 1.0).abs() > 1e-4 && pic.width() > 0.0 && fw > 0.0 {
             let cur = pic.width() * ppp / fw;
             let z = (cur * f).clamp(ZOOMS[0].1, ZOOMS[ZOOMS.len() - 1].1);
