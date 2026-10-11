@@ -919,19 +919,27 @@ mod tests {
     fn intra_frames_decode_in_parallel_once_each() {
         let s = Arc::new(samples(64, 1, 0, true));
         let c = Arc::new(GopCache::new(None));
-        std::thread::scope(|scope| {
-            for t in 0..4usize {
-                let (s, c) = (s.clone(), c.clone());
-                scope.spawn(move || {
-                    for k in 0..64usize {
-                        let i = (k * 7 + t * 16) % 64;
-                        assert_eq!(index_of(&c.frame(&*s, i as i64 * 1000).expect("frame")), i);
-                    }
-                });
-            }
-        });
-        // a frame two threads miss at the same moment may decode twice; nothing more
-        assert!(s.decodes.load(Ordering::Relaxed) <= 64 + 4 * 4);
+        // First decode 64 distinct cold frames: each of the four workers owns
+        // 16 indices. Multiplication by seven permutes them without overlap.
+        // Then let every worker request all 64 cached frames in overlapping order.
+        // Concurrent misses for the same cold frame may legitimately decode twice,
+        // so they cannot support a scheduler-independent duplicate allowance.
+        for requests_per_worker in [16usize, 64] {
+            let start = Arc::new(std::sync::Barrier::new(4));
+            std::thread::scope(|scope| {
+                for t in 0..4usize {
+                    let (s, c, start) = (s.clone(), c.clone(), start.clone());
+                    scope.spawn(move || {
+                        start.wait();
+                        for k in 0..requests_per_worker {
+                            let i = (k * 7 + t * 16) % 64;
+                            assert_eq!(index_of(&c.frame(&*s, i as i64 * 1000).expect("frame")), i);
+                        }
+                    });
+                }
+            });
+            assert_eq!(s.decodes.load(Ordering::Relaxed), 64, "cold frames decode once; warm requests hit the cache");
+        }
         assert_eq!(s.resets.load(Ordering::Relaxed), 0);
     }
 

@@ -519,7 +519,8 @@ mod tests {
 
     fn macos_packaging(file: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/macos").join(file);
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        // Git may check out packaging files with CRLF on Windows.
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).replace("\r\n", "\n")
     }
 
     /// Voice-over recording needs both halves on macOS: the usage string (else the permission
