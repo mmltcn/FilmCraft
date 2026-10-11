@@ -22,6 +22,9 @@ fn help_and_usage_errors() {
     assert_eq!(cli(&[]).status.code(), Some(2));
     assert_eq!(cli(&["frobnicate"]).status.code(), Some(2));
     assert_eq!(cli(&["exec", "file.newBin", "notkv"]).status.code(), Some(2));
+    // a non-loopback bridge address is a usage error for both exec and mcp (#921)
+    assert_eq!(cli(&["--bridge", "0.0.0.0:9876", "exec", "sequence.inspect"]).status.code(), Some(2));
+    assert_eq!(cli(&["mcp", "--bridge", "0.0.0.0:9876"]).status.code(), Some(2));
 }
 
 #[test]

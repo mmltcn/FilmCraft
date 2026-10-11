@@ -468,7 +468,7 @@ async fn cli() {
                 usage(format!("unknown mcp option `{opt}`"));
             }
             let server = match a.opt("--bridge") {
-                Some(addr) => filmcraft_automation::FilmcraftMcp::bridge(addr).unwrap_or_else(|e| fail(e)),
+                Some(addr) => filmcraft_automation::FilmcraftMcp::bridge(addr).unwrap_or_else(|e| usage(e)),
                 None => match Backend::open(&a) {
                     Backend::Local(s) => filmcraft_automation::FilmcraftMcp::headless(*s),
                     Backend::Bridge(_) => usage("mcp: use --bridge ADDR to drive a running app"),
