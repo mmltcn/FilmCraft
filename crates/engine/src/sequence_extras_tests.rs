@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use filmcraft_project::{ItemKind, MarkerKind, Transcript, Word};
+use filmcraft_project::{ItemKind, Label, MarkerKind, Transcript, Word};
 use filmcraft_speech::FixedTranscriber;
 use filmcraft_time::Tick;
 use serde_json::json;
@@ -234,4 +234,13 @@ fn flash_cue_markers_round_trip() {
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active_sequence().unwrap().markers.iter().all(|m| m.kind != MarkerKind::FlashCue));
+}
+
+#[test]
+fn flash_cue_colour_maps_premiere_names() {
+    let mut s = demo();
+    let r = s.execute("markers.addFlashCue", json!({"color": "Red"})).unwrap();
+    let id = r["marker"].as_u64().unwrap();
+    assert_eq!(s.active_sequence().unwrap().markers.iter().find(|m| m.id.0 == id).unwrap().color, Label::Rose);
+    assert!(s.execute("markers.addFlashCue", json!({"color": "NotAColor"})).is_err());
 }

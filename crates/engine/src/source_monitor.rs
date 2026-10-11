@@ -274,7 +274,9 @@ fn text<'a>(p: &'a Value, key: &str, id: &str) -> Result<Option<&'a str>> {
     p.get(key).map(|v| v.as_str().ok_or_else(|| bad(id, format!("{key} must be text")))).transpose()
 }
 fn color(p: &Value, id: &str) -> Result<Option<Label>> {
-    text(p, "color", id)?.map(|t| Label::from_name(t).ok_or_else(|| bad(id, "unknown marker color"))).transpose()
+    text(p, "color", id)?
+        .map(|t| Label::from_marker_name(t).ok_or_else(|| bad(id, format!("unknown colour `{t}` ({})", Label::accepted_colour_names()))))
+        .transpose()
 }
 fn duration(p: &Value, view: &crate::clip_ops::SourceView, id: &str) -> Result<Tick> {
     let Some(v) = p.get("durationFrames") else { return Ok(Tick::ZERO) };

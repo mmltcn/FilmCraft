@@ -31,7 +31,7 @@ use filmcraft_project::{AudioChannels, ClipId, ItemId, Label, Marker, MarkerId, 
 use filmcraft_time::{Tick, TimeRange};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, always, bad, bool_p, clips_p, has_seq, str_p, time_p, track_p, with_links};
+use crate::commands::{CommandSpec, always, bad, bool_p, clips_p, has_seq, marker_color_p, str_p, time_p, track_p, with_links};
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -964,7 +964,7 @@ pub fn ripple_markers(markers: &mut Vec<Marker>, from: Tick, shift: Tick) {
 
 fn add_marker(s: &mut Session, label: &str, t: Tick, dur: Tick, kind: MarkerKind, name: String, p: &Value) -> Result<MarkerId> {
     let comment = str_p(p, "comment").unwrap_or("").to_string();
-    let color = str_p(p, "color").and_then(Label::from_name).unwrap_or(Label::Green);
+    let color = marker_color_p(p, "markers.add")?.unwrap_or(Label::Green);
     s.edit_sequence(label, |q, ctx, _| {
         let id = MarkerId(ctx.alloc());
         q.markers.push(Marker { id, start: t, duration: dur, name, comment, kind, color });
@@ -1007,11 +1007,13 @@ fn filter_colors(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v = Vec::new();
         for x in a {
             let n = x.as_str().unwrap_or_default();
-            v.push(Label::from_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}`")))?);
+            v.push(
+                Label::from_marker_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}` ({})", Label::accepted_colour_names())))?,
+            );
         }
         s.state.hidden_marker_colors = v;
     } else if let Some(n) = str_p(p, "color") {
-        let c = Label::from_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}`")))?;
+        let c = Label::from_marker_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}` ({})", Label::accepted_colour_names())))?;
         let hidden = s.state.hidden_marker_colors.contains(&c);
         let visible = bool_p(p, "visible").unwrap_or(hidden);
         s.state.hidden_marker_colors.retain(|x| *x != c);
