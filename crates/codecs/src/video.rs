@@ -140,11 +140,14 @@ pub(crate) fn tight_plane<T: Copy>(src: Vec<T>, stride: usize, w: usize, h: usiz
 }
 
 /// Colour of an H.264 / HEVC picture from its VUI code points (ITU-T H.273), as the decoders
-/// report it: BT.709 by default with the matrix guessed from the size, the signalled matrix and
-/// transfer when known, and full range when flagged. Shared by the software and hardware
-/// decoders so the two are interchangeable.
-pub fn vui_color(width: u32, height: u32, matrix: u8, transfer: u8, full_range: bool) -> filmcraft_color::ColorInfo {
+/// report it: BT.709 by default with the matrix guessed from the size, the signalled primaries,
+/// matrix and transfer when known, and full range when flagged. Shared by the software and
+/// hardware decoders so the two are interchangeable.
+pub fn vui_color(width: u32, height: u32, primaries: u8, matrix: u8, transfer: u8, full_range: bool) -> filmcraft_color::ColorInfo {
     let mut color = filmcraft_color::ColorInfo { matrix: filmcraft_frame::default_matrix(width, height), ..filmcraft_color::ColorInfo::REC709 };
+    if let Some(p) = primaries_from_code(primaries) {
+        color.primaries = p;
+    }
     if let Some(m) = filmcraft_color::Matrix::from_code(matrix) {
         color.matrix = m;
     }
@@ -250,7 +253,7 @@ impl H264Decoder {
         let y = tight_plane(p.y, p.y_stride, w, h);
         let u = tight_plane(p.u, p.uv_stride, cw, ch);
         let v = tight_plane(p.v, p.uv_stride, cw, ch);
-        let color = vui_color(p.width, p.height, p.color.matrix, p.color.transfer, p.color.full_range);
+        let color = vui_color(p.width, p.height, p.color.primaries, p.color.matrix, p.color.transfer, p.color.full_range);
         let par = sar_par(p.sar);
         let frame = VideoFrame {
             width: p.width,
@@ -371,7 +374,7 @@ impl HevcDecoder {
                 alpha: None,
             },
         };
-        let color = vui_color(p.width, p.height, p.color.matrix, p.color.transfer, p.color.full_range);
+        let color = vui_color(p.width, p.height, p.color.primaries, p.color.matrix, p.color.transfer, p.color.full_range);
         let par = sar_par(p.sar);
         let frame = VideoFrame { width: p.width, height: p.height, data, color, par, pts: filmcraft_time::Tick::ZERO };
         DecodedFrame { pts: p.pts, frame, draft: p.draft }
