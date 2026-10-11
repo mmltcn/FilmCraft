@@ -177,6 +177,8 @@ pub const WORKSPACES_FILE: &str = "workspaces.json";
 pub struct WorkspacePrefs {
     pub saved: Vec<SavedWorkspace>,
     pub current: String,
+    /// Last working arrangement; separate from explicit saved/reset checkpoints.
+    pub current_layout: Option<serde_json::Value>,
 }
 
 /// A named layout. `layout` is a [`DockNode`] kept as JSON, so one unreadable entry (a panel a
@@ -190,6 +192,9 @@ pub struct SavedWorkspace {
 
 impl WorkspacePrefs {
     pub fn load(path: &std::path::Path) -> Self {
+        if std::fs::metadata(path).is_ok_and(|m| m.len() > 4 * 1024 * 1024) {
+            return Self::default();
+        }
         std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
@@ -197,7 +202,11 @@ impl WorkspacePrefs {
             std::fs::create_dir_all(d)?;
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
+        file.sync_all()?;
+        drop(file);
         std::fs::rename(tmp, path)
     }
 }
@@ -231,7 +240,66 @@ pub fn find(prefs: &WorkspacePrefs, query: &str) -> Option<String> {
 
 /// The saved layout of a workspace: the user's saved version, else the built-in default.
 pub fn saved_layout(prefs: &WorkspacePrefs, name: &str) -> DockNode {
-    prefs.saved.iter().find(|s| s.name == name).and_then(|s| serde_json::from_value(s.layout.clone()).ok()).unwrap_or_else(|| workspace(name))
+    prefs.saved.iter().find(|s| s.name == name).and_then(|s| checked_layout(&s.layout)).unwrap_or_else(|| workspace(name))
+}
+
+/// Reject malformed layouts before recursive drawing or mutation. There can be at most one
+/// instance of each panel, so both the tree depth and its total size have small natural bounds.
+pub fn checked_layout(value: &serde_json::Value) -> Option<DockNode> {
+    let mut pending = vec![(value, 0usize)];
+    let mut count = 0usize;
+    while let Some((v, depth)) = pending.pop() {
+        count += 1;
+        if depth > 64 || count > 1024 {
+            return None;
+        }
+        match v {
+            serde_json::Value::Object(map) => pending.extend(map.values().map(|v| (v, depth + 1))),
+            serde_json::Value::Array(items) => pending.extend(items.iter().map(|v| (v, depth + 1))),
+            _ => {}
+        }
+    }
+    let node: DockNode = serde_json::from_value(value.clone()).ok()?;
+    fn valid(n: &DockNode, depth: usize, seen: &mut Vec<PanelKind>) -> bool {
+        if depth > PanelKind::ALL.len() {
+            return false;
+        }
+        match n {
+            DockNode::Split { size, a, b, .. } => {
+                let size_ok = match size {
+                    SplitSize::Ratio(v) => v.is_finite() && (0.0..=1.0).contains(v),
+                    SplitSize::FixedA(v) | SplitSize::FixedB(v) => v.is_finite() && (0.0..=100_000.0).contains(v),
+                };
+                size_ok && valid(a, depth + 1, seen) && valid(b, depth + 1, seen)
+            }
+            DockNode::Tabs { panels, active } => {
+                if panels.is_empty() {
+                    // Closing the final panel intentionally leaves an empty root (#284).
+                    return depth == 0 && *active == 0;
+                }
+                if *active >= panels.len() {
+                    return false;
+                }
+                for p in panels {
+                    if seen.contains(p) {
+                        return false;
+                    }
+                    seen.push(*p);
+                }
+                true
+            }
+        }
+    }
+    valid(&node, 0, &mut Vec::new()).then_some(node)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockPlacement {
+    Tab,
+    Left,
+    Right,
+    Top,
+    Bottom,
 }
 
 /// The default layout of a named workspace.
@@ -265,7 +333,7 @@ pub fn workspace(name: &str) -> DockNode {
                 hsplit(Ratio(0.5), tabs(&[Source, EffectControls, AudioClipMixer], 1), tabs(&[Program], 0)),
                 hsplit(Ratio(0.3), tabs(&[Project, MediaBrowser, Info, Markers, History], 0), bottom_editing()),
             ),
-            vsplit(Ratio(0.5), tabs(&[Effects], 0), tabs(&[EffectControls, EssentialGraphics], 1)),
+            vsplit(Ratio(0.5), tabs(&[Effects], 0), tabs(&[EssentialGraphics], 0)),
         ),
         "Audio" => hsplit(
             FixedB(320.0),
@@ -313,6 +381,37 @@ pub fn workspace(name: &str) -> DockNode {
 }
 
 impl DockNode {
+    /// Move by panel identity, not a tree path: removing an empty source can collapse ancestors.
+    pub fn move_panel(&mut self, panel: PanelKind, target: PanelKind, placement: DockPlacement) -> bool {
+        if panel == target || !self.contains(panel) || !self.contains(target) {
+            return false;
+        }
+        self.close(panel);
+        fn insert(n: &mut DockNode, panel: PanelKind, target: PanelKind, placement: DockPlacement) -> bool {
+            match n {
+                DockNode::Split { a, b, .. } => insert(a, panel, target, placement) || insert(b, panel, target, placement),
+                DockNode::Tabs { panels, active } if panels.contains(&target) => {
+                    if placement == DockPlacement::Tab {
+                        panels.push(panel);
+                        *active = panels.len() - 1;
+                    } else {
+                        let old = n.clone();
+                        let new = tabs(&[panel], 0);
+                        let (a, b) = if matches!(placement, DockPlacement::Left | DockPlacement::Top) { (new, old) } else { (old, new) };
+                        *n = DockNode::Split {
+                            vertical: matches!(placement, DockPlacement::Top | DockPlacement::Bottom),
+                            size: SplitSize::Ratio(0.5),
+                            a: Box::new(a),
+                            b: Box::new(b),
+                        };
+                    }
+                    true
+                }
+                _ => false,
+            }
+        }
+        insert(self, panel, target, placement)
+    }
     /// Every panel in the tree.
     pub fn panels(&self, out: &mut Vec<PanelKind>) {
         match self {
@@ -360,8 +459,9 @@ impl DockNode {
                 *self = (**a).clone();
             }
         } else if let DockNode::Tabs { panels, active } = self {
+            let selected = panels.get(*active).copied();
             panels.retain(|x| *x != p);
-            *active = (*active).min(panels.len().saturating_sub(1));
+            *active = selected.and_then(|s| panels.iter().position(|p| *p == s)).unwrap_or_else(|| (*active).min(panels.len().saturating_sub(1)));
         }
     }
     /// Put the Timeline panel back where the workspaces keep it (left of the audio meters) after
@@ -531,6 +631,18 @@ pub fn draw_group_chrome(
     painter.rect_filled(g.rect, t.radius, t.panel_bg);
     let active_panel = g.panels.get(g.active).copied();
     let compact = g.panels.len() == 1 && g.panels[0].compact();
+    // A dedicated grip also moves Timeline without changing sequence-tab drag/reorder semantics.
+    if let Some(panel) = active_panel {
+        let grip = if compact { Rect::from_min_size(g.rect.min, vec2(g.rect.width(), 8.0)) } else { Rect::from_min_size(g.rect.min, vec2(14.0, t.tab_h)) };
+        let response = ui.interact(grip, egui::Id::new(("dock-grip", panel)), Sense::drag());
+        reg.add(&format!("panel.drag.{}", panel.id()), grip, "Move panel");
+        start_panel_drag(ui, &response, panel);
+        if !compact {
+            for y in [-4.0, 0.0, 4.0] {
+                painter.circle_filled(grip.center() + vec2(0.0, y), 1.0, t.text_faint);
+            }
+        }
+    }
     if compact {
         // grip dots
         let c = pos2(g.rect.center().x, g.rect.min.y + 4.0);
@@ -575,7 +687,7 @@ pub fn draw_group_chrome(
             })
             .collect();
         let span = |from: usize, to: usize| widths.get(from..=to).map_or(0.0, |w| w.iter().sum::<f32>() + 8.0 * w.len() as f32);
-        let room = strip.width() - 12.0;
+        let room = strip.width() - 18.0;
         let all_fit = span(0, tabs.len().saturating_sub(1)) <= room;
         let room = if all_fit { room } else { room - 24.0 };
         let mut first = 0;
@@ -602,7 +714,7 @@ pub fn draw_group_chrome(
                 list_opened = !open;
             }
         }
-        let mut x = strip.min.x + 12.0;
+        let mut x = strip.min.x + 18.0;
         // sequence tabs as drawn (for dragging one past its neighbours), and the one being dragged
         let mut seq_rects: Vec<(u64, Rect)> = Vec::new();
         let mut dragged: Option<u64> = None;
@@ -616,8 +728,11 @@ pub fn draw_group_chrome(
             // a sequence tab keeps its identity when the tabs are reordered under the pointer
             let resp = match tab.seq {
                 Some(id) => ui.interact(tab_rect, egui::Id::new(("tab-seq", g.path.clone(), id)), Sense::click_and_drag()),
-                None => ui.interact(tab_rect, egui::Id::new(("tab", g.path.clone(), i)), Sense::click()),
+                None => ui.interact(tab_rect, egui::Id::new(("tab", g.path.clone(), i)), Sense::click_and_drag()),
             };
+            if tab.seq.is_none() {
+                start_panel_drag(ui, &resp, *p);
+            }
             if let Some(id) = tab.seq {
                 seq_rects.push((id, tab_rect));
                 if resp.dragged() {
@@ -747,6 +862,63 @@ pub fn draw_group_chrome(
     actions
 }
 
+fn start_panel_drag(ui: &egui::Ui, response: &egui::Response, panel: PanelKind) {
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    if response.drag_started() {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("dock-drag"), panel));
+    }
+}
+
+/// Draw above panel contents; release commits one move, Escape or release outside cancels.
+pub fn panel_drop(ui: &egui::Ui, groups: &[Group], t: &Tokens, reg: &mut crate::automation::Registry) -> Option<(PanelKind, PanelKind, DockPlacement)> {
+    let id = egui::Id::new("dock-drag");
+    let panel = ui.ctx().data(|d| d.get_temp::<PanelKind>(id))?;
+    let released = ui.input(|i| i.pointer.primary_released());
+    if ui.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) {
+        ui.ctx().data_mut(|d| d.remove::<PanelKind>(id));
+        return None;
+    }
+    let mut result = None;
+    if let Some(pos) = ui.input(|i| i.pointer.latest_pos()) {
+        for group in groups {
+            if !group.rect.contains(pos) {
+                continue;
+            }
+            let Some(target) = group.panels.iter().copied().find(|p| *p != panel) else {
+                continue;
+            };
+            let r = group.rect;
+            let x = (pos.x - r.left()) / r.width().max(1.0);
+            let y = (pos.y - r.top()) / r.height().max(1.0);
+            let (placement, preview) = if x < 0.22 {
+                (DockPlacement::Left, Rect::from_min_max(r.min, pos2(r.center().x, r.bottom())))
+            } else if x > 0.78 {
+                (DockPlacement::Right, Rect::from_min_max(pos2(r.center().x, r.top()), r.max))
+            } else if y < 0.22 {
+                (DockPlacement::Top, Rect::from_min_max(r.min, pos2(r.right(), r.center().y)))
+            } else if y > 0.78 {
+                (DockPlacement::Bottom, Rect::from_min_max(pos2(r.left(), r.center().y), r.max))
+            } else {
+                (DockPlacement::Tab, r)
+            };
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, id));
+            painter.rect_filled(preview.shrink(2.0), t.radius, t.focus.gamma_multiply(0.25));
+            painter.rect_stroke(preview.shrink(2.0), t.radius, Stroke::new(2.0, t.focus), StrokeKind::Inside);
+            reg.add("dock.drop", preview, "Dock panel here");
+            if released {
+                result = Some((panel, target, placement));
+            }
+            break;
+        }
+    }
+    if released || !ui.input(|i| i.pointer.primary_down()) {
+        ui.ctx().data_mut(|d| d.remove::<PanelKind>(id));
+    }
+    result
+}
+
 /// Placeholder body for panels that are not implemented yet.
 pub fn placeholder(ui: &mut egui::Ui, rect: Rect, t: &Tokens, text: &str) {
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, Tokens::ui(12.0), t.text_faint);
@@ -816,5 +988,38 @@ mod tests {
         d.open_near(PanelKind::Info, PanelKind::Source);
         assert!(d.is_visible(PanelKind::Info));
         assert_eq!(d, hsplit(SplitSize::Ratio(0.5), tabs(&[PanelKind::Effects, PanelKind::Info], 1), tabs(&[PanelKind::Markers], 0)));
+    }
+
+    #[test]
+    fn moves_preserve_panels_and_collapse_empty_sources() {
+        for placement in [DockPlacement::Tab, DockPlacement::Left, DockPlacement::Right, DockPlacement::Top, DockPlacement::Bottom] {
+            let mut d = hsplit(SplitSize::Ratio(0.4), tabs(&[PanelKind::Project], 0), tabs(&[PanelKind::Program], 0));
+            assert!(d.move_panel(PanelKind::Project, PanelKind::Program, placement));
+            assert!(d.is_visible(PanelKind::Project));
+            let mut panels = Vec::new();
+            d.panels(&mut panels);
+            assert_eq!(panels.len(), 2);
+            assert!(checked_layout(&serde_json::to_value(&d).unwrap()).is_some());
+            let before = d.clone();
+            assert!(!d.move_panel(PanelKind::Project, PanelKind::Project, placement));
+            assert!(!d.move_panel(PanelKind::Timeline, PanelKind::Project, placement));
+            assert_eq!(before, d);
+        }
+    }
+
+    #[test]
+    fn malformed_layouts_are_rejected() {
+        for node in [
+            tabs(&[], 1),
+            hsplit(SplitSize::Ratio(0.5), tabs(&[], 0), tabs(&[PanelKind::Program], 0)),
+            tabs(&[PanelKind::Project], usize::MAX),
+            tabs(&[PanelKind::Project, PanelKind::Project], 0),
+            hsplit(SplitSize::Ratio(-1.0), tabs(&[PanelKind::Project], 0), tabs(&[PanelKind::Program], 0)),
+        ] {
+            assert!(checked_layout(&serde_json::to_value(node).unwrap()).is_none());
+        }
+        for name in WORKSPACES {
+            assert!(checked_layout(&serde_json::to_value(workspace(name)).unwrap()).is_some(), "{name}");
+        }
     }
 }

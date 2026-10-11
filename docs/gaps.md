@@ -1,6 +1,6 @@
 # Where FilmCraft falls short of Premiere Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (new file: ROADMAP's "Where we are lacking" re-measured against Premiere Pro 26.5.2 and the open issue list) · **Target:** Adobe Premiere Pro 2026 (26.5.2)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (G8 in-window docking implemented; floating panels remain) · **Target:** Adobe Premiere Pro 2026 (26.5.2)
 
 Every known shortfall, one entry each, ranked by what most stops an editor using FilmCraft for real
 work. This is the work list: agents should prefer it over adding checklist items. Numbers are in
@@ -137,13 +137,15 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 ## G8. UI fidelity: monitor handles, Effect Controls, docking
 
 - **Missing:** on-screen transform handles for Motion / Transform in the Program monitor (#639);
-  Effect Controls keyframe zoom bar, draggable divider, row lines (#640–#645); panel docking
-  rearrangement (#493); clicking empty space to deselect (#683); filmstrip thumbnails (#614);
+  Effect Controls keyframe zoom bar, draggable divider, row lines (#640–#645); floating and
+  multi-monitor panels (#466); clicking empty space to deselect (#683); filmstrip thumbnails (#614);
   marquee selection in the Project panel (#578); Freeform bins and middle-mouse pan (#579);
   Program monitor Button Editor (+) (#431); keyframe curves for Position (#448); transition
   editing controls (#577); track renaming (#654); window controls on macOS (#637); UI scale on
   X11 (#457).
 - **Estimate:** 120–200 h. Doc: [ui-parity.md](ui-parity.md).
+- **Progress:** in-window tab/edge docking and automatic workspace restore are implemented;
+  see [reproducible validation](workspace-layout-validation.md). Floating windows remain out of scope.
 
 ## G9. Windows and Linux at run time
 
@@ -247,4 +249,5 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Narrow G8 docking gap to floating/multi-monitor panels; no readiness or estimate change |
 | 2026-10-10 | major | Created from ROADMAP.md's "Where we are lacking" (2026-10-05); re-ranked against Premiere 26.5.2 and the 188 open issues; added `.prproj`, 10-bit / 4:2:2 camera decode, launch crashes and missing PR CI, localization, delivery formats |
