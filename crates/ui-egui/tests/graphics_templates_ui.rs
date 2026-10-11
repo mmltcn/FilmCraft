@@ -19,13 +19,16 @@ struct Driver {
 
 impl Driver {
     fn demo(data: &str) -> Self {
+        Self::demo_with(data, |app| app)
+    }
+    fn demo_with(data: &str, hook: impl FnOnce(FilmcraftApp) -> FilmcraftApp) -> Self {
         let mut session = Session::default();
         session.execute("file.openDemoProject", json!({})).expect("demo project");
         let dir = std::env::temp_dir().join(format!("filmcraft-gfx-ui-{data}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         session.prefs_path = Some(dir.join("prefs.json"));
         let (tx, rx) = channel();
-        let app = FilmcraftApp::new(session).with_control(rx);
+        let app = hook(FilmcraftApp::new(session).with_control(rx));
         let shots = std::env::var_os("FILMCRAFT_UI_SHOTS").map(std::path::PathBuf::from);
         let mut b = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000);
         if shots.is_some() {
@@ -183,6 +186,30 @@ fn export_dialog_and_install_round_trip() {
     d.frames(2);
     let used = d.exec("graphics.fonts.used", json!({}));
     assert!(used.as_array().unwrap().iter().any(|f| f["family"] == "Noto Serif"), "{used}");
+}
+
+#[test]
+fn install_unsupported_zip_reports_status() {
+    let dir = std::env::temp_dir().join(format!("filmcraft-gfx-ui-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let zip = dir.join("renamed.fcgt");
+    std::fs::write(&zip, b"PK\x03\x04not-a-template").unwrap();
+    let path = zip.to_string_lossy().to_string();
+    let mut d = Driver::demo_with("install-bad", move |mut app| {
+        app.hooks.pick_open_file = Some(Box::new(move |_, _| Some(path.clone())));
+        app
+    });
+    d.ok("ui.set", json!({"workspace": "Captions and Graphics"}));
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.EssentialGraphics"}));
+    d.ok("ui.set", json!({"gfxTemplates": {"tab": "browse"}}));
+    d.frames(4);
+    d.ok("ui.click", json!({"id": "gfxTemplates.install"}));
+    d.frames(3);
+    let st = d.ok("ui.inspect", json!({}));
+    let status = st["ui"]["status"].as_str().unwrap_or("");
+    assert!(status.contains("does not read") || status.contains("mogrt") || status.contains("not a FilmCraft"), "{status}");
+    let list = d.exec("graphics.template.list", json!({"source": "user"}));
+    assert!(list.as_array().unwrap().is_empty(), "{list}");
 }
 
 #[test]

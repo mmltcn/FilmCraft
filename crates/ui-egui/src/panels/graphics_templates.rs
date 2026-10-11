@@ -292,7 +292,9 @@ fn browse(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         app.auto.add(&id, r, &l);
     }
     if install {
-        let _ = route(app, &ctx, "graphics.template.install", &json!({}));
+        if let Some(Err(e)) = route(app, &ctx, "graphics.template.install", &json!({})) {
+            app.ui.status = e;
+        }
     }
     for (cmd, p) in actions {
         match app.session.execute(&cmd, p) {
