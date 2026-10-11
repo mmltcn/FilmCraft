@@ -1771,20 +1771,26 @@ pub fn properties(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     for (id, r, label) in autos {
         app.auto.add(&id, r, &label);
     }
+    let (down, press) = ui.ctx().input(|i| (i.pointer.any_down(), i.pointer.press_start_time()));
+    let key = egui::Id::new("gfx-props-drag-step");
+    let begun = ui.ctx().data(|d| d.get_temp::<Option<f64>>(key)).flatten();
+    let mut wrote = false;
     for (cmd, mut p) in actions {
         // a drag of a property is one undo step: the first change of each press begins a new one,
-        // the rest fold into it (like Effect Controls, #201)
-        if cmd == "graphics.set" && ui.ctx().input(|i| i.pointer.any_down()) {
-            let key = egui::Id::new("gfx-props-drag-step");
-            let press = ui.ctx().input(|i| i.pointer.press_start_time());
-            let begun = ui.ctx().data(|d| d.get_temp::<Option<f64>>(key)).flatten();
+        // the rest fold into it (like Effect Controls, #201 / #887)
+        if cmd == "graphics.set" && down {
             p["merge"] = json!(true);
             p["begin"] = json!(begun != press);
-            ui.ctx().data_mut(|d| d.insert_temp(key, press));
+            wrote = true;
         }
         if let Err(e) = app.session.execute(&cmd, p) {
             app.ui.status = e.to_string();
         }
+    }
+    if down && (wrote || begun.is_some()) {
+        ui.ctx().data_mut(|d| d.insert_temp(key, press));
+    } else if !down {
+        ui.ctx().data_mut(|d| d.remove::<Option<f64>>(key));
     }
 }
 

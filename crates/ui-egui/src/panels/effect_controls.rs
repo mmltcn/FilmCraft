@@ -963,20 +963,28 @@ pub fn properties_panel(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
 /// Run the panel's actions. Parameter changes made while the mouse button is down (a drag) share
 /// one undo step, which the first change of each press begins (#201); typed values and clicks stay
 /// separate steps. A drag value only changes once the mouse moves, after the press frame, so the
-/// press that already began a step is remembered by its start time.
+/// press that already began a step is remembered by its start time. That memory is refreshed on
+/// every frame the button stays down — including frames with no value change — so a Scale scrub
+/// that pauses between percents is still one undo (#887).
 fn run(app: &mut FilmcraftApp, ctx: &egui::Context, actions: Vec<(String, Value)>) {
     let (down, press) = ctx.input(|i| (i.pointer.any_down(), i.pointer.press_start_time()));
     let key = egui::Id::new("effect-controls-drag-step");
+    let begun = ctx.data(|d| d.get_temp::<Option<f64>>(key)).flatten();
+    let mut wrote = false;
     for (cmd, mut p) in actions {
         if cmd == "effects.setParam" && down {
-            let begun = ctx.data(|d| d.get_temp::<Option<f64>>(key)).flatten();
             p["merge"] = json!(true);
             p["begin"] = json!(begun != press);
-            ctx.data_mut(|d| d.insert_temp(key, press));
+            wrote = true;
         }
         if let Err(e) = app.session.execute(&cmd, p) {
             app.ui.status = e.to_string();
         }
+    }
+    if down && (wrote || begun.is_some()) {
+        ctx.data_mut(|d| d.insert_temp(key, press));
+    } else if !down {
+        ctx.data_mut(|d| d.remove::<Option<f64>>(key));
     }
 }
 
@@ -1252,6 +1260,45 @@ mod drag_undo_tests {
         assert_eq!(opacity(&app), 70.0, "undo takes back only the second drag");
         app.session.undo();
         assert_eq!(opacity(&app), start, "and then the first");
+    }
+
+    /// #887: a Scale hot-text drag that pauses between percents (no `setParam` that frame) is
+    /// still one undo, not one step per 1%.
+    #[test]
+    fn a_scale_drag_with_idle_frames_is_one_undo_step() {
+        let mut s = filmcraft_engine::Session::default();
+        s.execute("file.openDemoProject", json!({})).unwrap();
+        let clip = s.active_sequence().unwrap().video_tracks[0].items[0].id.0;
+        let mut app = crate::FilmcraftApp::new(s);
+        let ctx = egui::Context::default();
+        let scale = |app: &crate::FilmcraftApp| {
+            let q = app.session.active_sequence().unwrap();
+            let it = q.find_item(filmcraft_project::ClipId(clip)).unwrap().1;
+            it.effects.iter().find(|e| e.effect == "motion").unwrap().params["scale"].value.as_f64().unwrap()
+        };
+        let start = scale(&app);
+        let pos = egui::pos2(10.0, 10.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let mut time = 0.0;
+        let mut frame = |app: &mut crate::FilmcraftApp, events: Vec<egui::Event>, value: Option<f64>| {
+            time += 0.1;
+            let raw = egui::RawInput { time: Some(time), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let actions = value.map(|v| ("effects.setParam".to_string(), json!({"clip": clip, "effect": "motion", "param": "scale", "value": v})));
+                super::run(app, ui.ctx(), actions.into_iter().collect());
+            });
+            out.textures_delta.clear();
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(pos), button(true)], None);
+        for v in [101.0, 150.0, 200.0, 249.0] {
+            frame(&mut app, vec![egui::Event::PointerMoved(pos)], Some(v));
+            frame(&mut app, vec![egui::Event::PointerMoved(pos)], None); // idle: mouse down, no 1% tick
+        }
+        frame(&mut app, vec![button(false)], None);
+        assert_eq!(scale(&app), 249.0);
+        app.session.undo();
+        assert_eq!(scale(&app), start, "one undo restores the scale from before the drag");
+        assert_eq!(app.session.undo(), None, "the drag must not have left extra 1% steps");
     }
 }
 
