@@ -673,3 +673,26 @@ fn new_sequence_opens_its_dialog() {
     assert!(d.ids("sequenceSettings.tab.color").iter().any(|i| i == "sequenceSettings.tab.color"));
     d.click("sequenceSettings.cancel");
 }
+
+/// New Sequence stays open when the engine rejects the frame size so the rest of the draft is not lost.
+#[test]
+fn new_sequence_stays_open_on_invalid_frame_size() {
+    let mut d = Driver::demo();
+    let n0 = d.app().session.project.sequences().count();
+    d.ok("ui.menu.invoke", json!({"id": "file.newSequence"}));
+    d.frames(10);
+    {
+        let s = &mut d.app().ui.sequence_settings;
+        s.name = "Keep Me".into();
+        // within the dialog's per-side range, over the engine's pixel budget
+        (s.width, s.height) = (20_000, 20_000);
+    }
+    d.frames(2);
+    d.click("sequenceSettings.ok");
+    d.frames(2);
+    assert_eq!(d.app().session.project.sequences().count(), n0, "nothing is made");
+    assert!(!d.ids("sequenceSettings.").is_empty(), "dialog stays open: {}", d.app().ui.status);
+    assert_eq!(d.label("sequenceSettings.name"), "Keep Me");
+    assert_eq!(d.label("sequenceSettings.width"), "20000");
+    assert_eq!(d.label("sequenceSettings.height"), "20000");
+}

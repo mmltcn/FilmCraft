@@ -540,9 +540,12 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
             .and_then(|_| if rest.is_empty() { Ok(Value::Null) } else { app.session.execute("sequence.settings", Value::Object(rest)) });
         if let Err(e) = r {
             app.ui.status = e.to_string();
+            keep = true;
+        } else {
+            keep = false;
         }
         app.ui.sequence_settings = d;
-        return false;
+        return keep;
     }
     if apply {
         let p = changes(&d, &cur, &cur_name);
@@ -551,8 +554,10 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
             && let Err(e) = app.session.execute("sequence.settings", Value::Object(p))
         {
             app.ui.status = e.to_string();
+            keep = true;
+        } else {
+            keep = false;
         }
-        keep = false;
     }
     app.ui.sequence_settings = d;
     keep
