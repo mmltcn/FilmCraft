@@ -123,6 +123,28 @@ fn compact_transport_buttons_stay_inside_monitor() {
 }
 
 #[test]
+fn transport_buttons_are_large_and_evenly_spaced() {
+    for (which, prefix) in [(Which::Source, "source"), (Which::Program, "program")] {
+        let h = harness(720.0, ThemeKind::Dark, which);
+        let mut buttons: Vec<Rect> = h
+            .state()
+            .auto
+            .elements
+            .iter()
+            .filter(|e| e.id.starts_with(&format!("{prefix}.transport.")) && !e.id.contains(".editor"))
+            .map(|e| element(&h, &e.id))
+            .collect();
+        buttons.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert!(buttons.len() >= 10, "{prefix}: {buttons:?}");
+        for b in &buttons {
+            assert!(b.width() >= 28.0 && b.height() >= 28.0, "{prefix}: small button {b:?}");
+        }
+        let gaps: Vec<f32> = buttons.windows(2).map(|w| w[1].left() - w[0].right()).collect();
+        assert!(gaps.iter().all(|g| (g - gaps[0]).abs() < 0.5 && *g > 2.0), "{prefix}: gaps {gaps:?}");
+    }
+}
+
+#[test]
 fn transport_editor_keeps_its_own_space_and_customizes_compact_controls() {
     for width in [720.0, 500.0, 300.0, 250.0, 90.0] {
         let mut h = harness(width, ThemeKind::Light, Which::Program);

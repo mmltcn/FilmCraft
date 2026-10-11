@@ -308,6 +308,9 @@ pub struct MonitorView {
     pub zoom: Option<f32>,
     /// Pan offset of a magnified picture from the centre (points).
     pub pan: [f32; 2],
+    /// The part of the clip or sequence the time ruler under the picture shows, as fractions of its
+    /// length (start, end), set with the zoom bar under the ruler; None = all of it.
+    pub time_zoom: Option<[f64; 2]>,
     pub safe_margins: bool,
     pub show_transport: bool,
     /// Transport buttons hidden through the monitor's Button Editor. Stored per monitor.
@@ -333,6 +336,7 @@ impl Default for MonitorView {
             high_quality: false,
             zoom: None,
             pan: [0.0, 0.0],
+            time_zoom: None,
             safe_margins: false,
             show_transport: true,
             // The optional Loop button is available from the editor without altering default layouts.
