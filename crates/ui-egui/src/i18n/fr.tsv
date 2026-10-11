@@ -3545,3 +3545,9 @@
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	Notes pour ce projet : tâches, instructions, numéros d'image… Enregistrées avec le projet.
 	Use Effect Shutter Angle	Utiliser l'angle d'obturation de l'effet
 	Settings	Préférences
+	Safe graphics mode: {mode}	Mode graphique sans échec : {mode}
+	An earlier start failed with the default graphics. Updating the graphics driver usually fixes this.	Un démarrage précédent a échoué avec les graphismes par défaut. Mettre à jour le pilote graphique résout généralement le problème.
+	Use Default Graphics	Utiliser les graphismes par défaut
+	The default graphics are used from the next start.	Les graphismes par défaut seront utilisés au prochain démarrage.
+	DirectX 12 only	DirectX 12 uniquement
+	software rendering	rendu logiciel

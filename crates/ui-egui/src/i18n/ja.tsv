@@ -3544,3 +3544,9 @@
 	Edit Project Notes	プロジェクトメモを編集
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	このプロジェクトのメモ: やること、指示、フレーム番号など… プロジェクトと一緒に保存されます。
 	GPU acceleration is unavailable; preview renders on the CPU	GPU アクセラレーションを利用できません。プレビューは CPU でレンダリングされます
+	Safe graphics mode: {mode}	セーフグラフィックモード: {mode}
+	An earlier start failed with the default graphics. Updating the graphics driver usually fixes this.	以前の起動がデフォルトのグラフィックで失敗しました。グラフィックドライバーを更新すると、通常は解決します。
+	Use Default Graphics	デフォルトのグラフィックを使用
+	The default graphics are used from the next start.	次回の起動からデフォルトのグラフィックが使用されます。
+	DirectX 12 only	DirectX 12 のみ
+	software rendering	ソフトウェアレンダリング

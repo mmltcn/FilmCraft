@@ -39,6 +39,7 @@ pub mod dock;
 mod dock_shared;
 mod dock_ui;
 pub mod frames;
+pub mod graphics_notice;
 pub mod header;
 pub mod i18n;
 pub mod icons;
@@ -302,6 +303,9 @@ pub struct FilmcraftApp {
     styled: bool,
     /// A panic in the UI pass, shown in an error window until dismissed (see [`crash`]).
     pub ui_error: Option<String>,
+    /// The window runs in a fallback graphics mode (set by the desktop host): a notice with a
+    /// button back to the default mode (see [`graphics_notice`]).
+    pub graphics_notice: Option<graphics_notice::GraphicsNotice>,
     /// Fault injection for robustness tests: the next UI pass panics.
     #[doc(hidden)]
     pub panic_next_frame: bool,
@@ -546,6 +550,7 @@ impl FilmcraftApp {
             bindings_rev: 0,
             shortcut_editor: Default::default(),
             toast: None,
+            graphics_notice: None,
             tl: Default::default(),
             command_inbox: None,
             v_down: false,
@@ -1935,6 +1940,10 @@ impl eframe::App for FilmcraftApp {
             self.playback.playing = false;
         }
         self.error_window(ui.ctx());
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graphics_notice::show(self, ui.ctx()))).is_err() {
+            // a broken notice must not take the session down: drop it
+            self.graphics_notice = None;
+        }
         let ctx = ui.ctx().clone();
         self.last_ui_time = ctx.input(|i| i.time);
         if !self.synthetic.is_empty() {

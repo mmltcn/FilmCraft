@@ -3562,3 +3562,9 @@
 	Edit Project Notes	Editar notas del proyecto
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	Notas de este proyecto: tareas pendientes, instrucciones, números de fotograma… Se guardan con el proyecto.
 	Use Effect Shutter Angle	Usar el ángulo de obturación del efecto
+	Safe graphics mode: {mode}	Modo gráfico seguro: {mode}
+	An earlier start failed with the default graphics. Updating the graphics driver usually fixes this.	Un inicio anterior falló con los gráficos predeterminados. Actualizar el controlador gráfico suele solucionarlo.
+	Use Default Graphics	Usar gráficos predeterminados
+	The default graphics are used from the next start.	Los gráficos predeterminados se usarán a partir del próximo inicio.
+	DirectX 12 only	Solo DirectX 12
+	software rendering	renderizado por software

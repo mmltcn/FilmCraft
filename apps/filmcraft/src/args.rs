@@ -15,6 +15,9 @@ Options:
   --no-recover       start without asking about unsaved changes
   --data-dir <dir>   folder for auto-save, crash recovery and logs
                      (also: FILMCRAFT_DATA_DIR)
+  --graphics <mode>  start with this graphics mode and keep it: default,
+                     dx12 (Windows), software (Windows, Linux);
+                     `--graphics default` undoes an automatic fallback
   --version          print the version and exit
   -h, --help         print this help and exit
 ";
@@ -28,7 +31,7 @@ pub enum Cli {
 }
 
 /// Options of a normal start.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Launch {
     pub control_port: Option<u16>,
     pub control_input_only: bool,
@@ -39,6 +42,8 @@ pub struct Launch {
     pub startup_flag: bool,
     pub recover: Option<bool>,
     pub data_dir: Option<std::path::PathBuf>,
+    /// `--graphics <mode>`: start with this graphics mode and keep it (see `graphics.rs`).
+    pub graphics: Option<crate::graphics::Mode>,
 }
 
 /// Parse the arguments after the program name. `env_control_port` is the value of
@@ -49,7 +54,16 @@ pub struct Launch {
 /// a script waiting for it. That holds for the whole line, so `--version --bogus` is an error
 /// too, and for a port from the environment exactly as for one from `--control`.
 pub fn parse(env_control_port: Option<String>, args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
-    let mut l = Launch { control_port: None, control_input_only: false, files: Vec::new(), demo: true, startup_flag: false, recover: None, data_dir: None };
+    let mut l = Launch {
+        control_port: None,
+        control_input_only: false,
+        files: Vec::new(),
+        demo: true,
+        startup_flag: false,
+        recover: None,
+        data_dir: None,
+        graphics: None,
+    };
     let (mut help, mut version) = (false, false);
     let mut args = args.into_iter();
     while let Some(a) = args.next() {
@@ -66,6 +80,10 @@ pub fn parse(env_control_port: Option<String>, args: impl IntoIterator<Item = St
             "--recover" => l.recover = Some(true),
             "--no-recover" => l.recover = Some(false),
             "--data-dir" => l.data_dir = Some(args.next().map(std::path::PathBuf::from).ok_or("--data-dir needs a folder")?),
+            "--graphics" => {
+                let name = args.next().ok_or("--graphics needs a mode: default, dx12 or software")?;
+                l.graphics = Some(graphics_mode(&name)?);
+            }
             // everything after `--` is a file, whatever it looks like
             "--" => l.files.extend(args.by_ref()),
             // macOS adds a process serial number when it launches an app bundle
@@ -89,6 +107,17 @@ pub fn parse(env_control_port: Option<String>, args: impl IntoIterator<Item = St
         return Err("--control-input-only requires --control or FILMCRAFT_CONTROL_PORT".into());
     }
     Ok(Cli::Run(l))
+}
+
+/// A `--graphics` value: one of this platform's modes.
+fn graphics_mode(name: &str) -> Result<crate::graphics::Mode, String> {
+    use crate::graphics::{LADDER, Mode};
+    let here = || LADDER.iter().map(|m| m.name()).collect::<Vec<_>>().join(", ");
+    let mode = Mode::parse(name).ok_or_else(|| format!("--graphics needs one of {}, got `{name}`", here()))?;
+    if !LADDER.contains(&mode) {
+        return Err(format!("--graphics {name} is not available on this platform (use one of {})", here()));
+    }
+    Ok(mode)
 }
 
 #[cfg(test)]
@@ -166,7 +195,16 @@ mod tests {
         let none = launch(&[]);
         assert_eq!(
             none,
-            Launch { control_port: None, control_input_only: false, files: vec![], demo: true, startup_flag: false, recover: None, data_dir: None }
+            Launch {
+                control_port: None,
+                control_input_only: false,
+                files: vec![],
+                demo: true,
+                startup_flag: false,
+                recover: None,
+                data_dir: None,
+                graphics: None
+            }
         );
         let l = launch(&["--control", "9876", "--empty", "--no-recover", "--data-dir", "/tmp/fc", "cut.fcproj", "a.mp4"]);
         assert_eq!(l.control_port, Some(9876));
@@ -187,5 +225,24 @@ mod tests {
         assert!(matches!(parse_env(Some("9876"), &["--control-input-only"]), Ok(Cli::Run(Launch { control_input_only: true, control_port: Some(9876), .. }))));
         assert_eq!(parse_args(&["--control-input-only", "--help"]), Ok(Cli::Help));
         assert!(USAGE.contains("--control-input-only"));
+    }
+
+    #[test]
+    fn graphics_picks_one_of_this_platforms_modes() {
+        use crate::graphics::{LADDER, Mode};
+        assert_eq!(launch(&[]).graphics, None);
+        assert_eq!(launch(&["--graphics", "default"]).graphics, Some(Mode::Default));
+        for mode in LADDER {
+            assert_eq!(launch(&["--graphics", mode.name()]).graphics, Some(*mode));
+        }
+        // a mode this platform has not is refused, not ignored
+        for mode in [Mode::Dx12, Mode::Software].into_iter().filter(|m| !LADDER.contains(m)) {
+            assert!(parse_args(&["--graphics", mode.name()]).unwrap_err().contains("not available"));
+        }
+        assert!(parse_args(&["--graphics"]).is_err(), "missing mode");
+        assert!(parse_args(&["--graphics", "vulkan"]).unwrap_err().contains("vulkan"));
+        assert!(parse_args(&["--graphics", "DEFAULT"]).is_err());
+        assert!(parse_args(&["--graphics", &"x".repeat(1 << 16)]).is_err());
+        assert!(USAGE.contains("--graphics"));
     }
 }
