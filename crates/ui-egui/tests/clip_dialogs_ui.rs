@@ -289,6 +289,22 @@ fn speed_duration_from_the_clip_menu_opens_the_dialog() {
     assert_eq!(got.time_interpolation, filmcraft_project::TimeInterpolation::FrameBlending);
 }
 
+/// #1018: Scene Edit Detection… is in the clip's right-click menu and opens its dialog.
+#[test]
+fn scene_edit_detection_from_the_clip_menu_opens_the_dialog() {
+    let mut d = Driver::new();
+    let c = d.v1(0);
+    d.exec("timeline.select", json!({"clips": [c.id.0]}));
+    d.ok("ui.click", json!({"id": format!("timeline.clip.{}", c.id.0), "button": "right"}));
+    d.frames(3);
+    d.click("timeline.clipMenu.clip.sceneEditDetection");
+    for id in ["sceneDetect.applyCuts", "sceneDetect.createSubclips", "sceneDetect.generateMarkers", "sceneDetect.ok"] {
+        assert!(d.has(id), "{id}");
+    }
+    d.click("sceneDetect.cancel");
+    assert!(!d.has("sceneDetect.ok"));
+}
+
 #[test]
 fn quitting_with_unsaved_changes_asks_to_save() {
     let mut d = Driver::new();

@@ -2793,8 +2793,8 @@
 	Ignore Audio	オーディオを無視
 	Ignore Video	ビデオを無視
 	Apply a cut at each detected cut point	検出したカット点ごとにカットを適用
-	Create a subclip for each detected cut point	検出したカット点ごとにサブクリップを作成
-	Generate clip markers at each detected cut point	検出したカット点ごとにクリップマーカーを生成
+	Create a bin of subclips from each detected cut point	検出したカット点ごとにサブクリップのビンを作成
+	Create a clip marker at each detected cut point	検出したカット点ごとにクリップマーカーを作成
 	Sensitivity:	感度:
 	Normalize Mix Track to:	ミックストラックのノーマライズ値:
 	Disabled clips	無効なクリップ

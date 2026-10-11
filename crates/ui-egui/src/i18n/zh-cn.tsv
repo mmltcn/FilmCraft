@@ -2787,8 +2787,8 @@
 	Ignore Audio	忽略音频
 	Ignore Video	忽略视频
 	Apply a cut at each detected cut point	在每个检测到的切点应用剪切
-	Create a subclip for each detected cut point	为每个检测到的切点创建子剪辑
-	Generate clip markers at each detected cut point	在每个检测到的切点生成剪辑标记
+	Create a bin of subclips from each detected cut point	从每个检测到的切点创建子剪辑素材箱
+	Create a clip marker at each detected cut point	在每个检测到的切点创建剪辑标记
 	Sensitivity:	灵敏度：
 	Normalize Mix Track to:	将混音轨道标准化至：
 	Disabled clips	已禁用的剪辑

@@ -2805,8 +2805,8 @@
 	Ignore Audio	Ignorer l'audio
 	Ignore Video	Ignorer la vidéo
 	Apply a cut at each detected cut point	Appliquer une coupe à chaque point de coupe détecté
-	Create a subclip for each detected cut point	Créer un sous-clip pour chaque point de coupe détecté
-	Generate clip markers at each detected cut point	Générer des marqueurs de clip à chaque point de coupe détecté
+	Create a bin of subclips from each detected cut point	Créer un chutier de sous-clips à partir de chaque point de coupe détecté
+	Create a clip marker at each detected cut point	Créer un marqueur de clip à chaque point de coupe détecté
 	Sensitivity:	Sensibilité :
 	Normalize Mix Track to:	Normaliser la piste de mixage à :
 	Disabled clips	Clips désactivés

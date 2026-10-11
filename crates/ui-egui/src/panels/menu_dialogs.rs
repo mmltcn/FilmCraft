@@ -707,8 +707,8 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             }
             "clip.sceneEditDetection" => {
                 check(ui, &mut elems, pre, p, "applyCuts", tl!("Apply a cut at each detected cut point"));
-                check(ui, &mut elems, pre, p, "createSubclips", tl!("Create a subclip for each detected cut point"));
-                check(ui, &mut elems, pre, p, "generateMarkers", tl!("Generate clip markers at each detected cut point"));
+                check(ui, &mut elems, pre, p, "createSubclips", tl!("Create a bin of subclips from each detected cut point"));
+                check(ui, &mut elems, pre, p, "generateMarkers", tl!("Create a clip marker at each detected cut point"));
                 ui.horizontal(|ui| {
                     ui.label(tl!("Sensitivity:"));
                     let mut v = p["sensitivity"].as_f64().unwrap_or(50.0);
