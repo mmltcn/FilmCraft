@@ -17,6 +17,7 @@ use filmcraft_project::Label;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::{AudioDevices, Dialog, FilmcraftApp};
 
@@ -42,6 +43,12 @@ pub struct SettingsDraft {
     /// Audio devices reported by the platform (Audio Hardware page).
     #[serde(default)]
     pub devices: Option<AudioDevices>,
+    /// Label color presets found when the Labels page was shown (the built-in one first).
+    #[serde(default)]
+    pub label_presets: Option<Vec<settings::LabelPreset>>,
+    /// Result of the last Label Color Presets button, or its error.
+    #[serde(default)]
+    pub preset_message: String,
 }
 
 /// Open the dialog on a category page.
@@ -552,6 +559,93 @@ fn color_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, key: 
     }
 }
 
+/// Settings ▸ Labels ▸ Label Color Presets: take the label names and colours from a preset, and
+/// share presets as files. Picking a preset or Revert edits the draft (OK applies it, Cancel
+/// discards it); Import, Export and Delete act on the files at once.
+fn label_presets(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft) {
+    let t = app.tokens;
+    let presets = d.label_presets.get_or_insert_with(|| app.session.label_presets().into_iter().map(|(p, _)| p).collect()).clone();
+    let labels: settings::LabelPrefs = serde_json::from_value(get(&d.values, "labels").clone()).unwrap_or_default();
+    let selected = presets.iter().find(|p| p.name == labels.preset);
+    let modified = selected.is_some_and(|p| !p.matches(&labels));
+    let folder = app.session.label_presets_dir();
+    let mut pick = None;
+    group(ui, &t, tl!("Label Color Presets"), |ui| {
+        ui.horizontal(|ui| {
+            let opts: Vec<(String, String)> = presets.iter().map(|p| (p.name.clone(), p.name.clone())).collect();
+            let shown = if modified { tlf!("{name} (Modified)", name = labels.preset) } else { labels.preset.clone() };
+            if let Some(name) = combo(app, ui, "labels.preset", &shown, &opts, 150.0) {
+                pick = presets.iter().find(|p| p.name == name).cloned();
+            }
+            if preset_button(app, ui, "revert", Icon::Reset, tl!("Revert to the preset's colors and names"), modified) {
+                pick = selected.cloned();
+            }
+            if preset_button(app, ui, "import", Icon::Import, tl!("Import a preset file…"), true)
+                && let Some(path) = app.hooks.pick_open_file.as_mut().and_then(|f| f(tl!("Label Color Presets"), &["json"]))
+            {
+                d.label_presets = None;
+                match app.session.import_label_preset(std::path::Path::new(&path)) {
+                    Ok(p) => {
+                        d.preset_message = tlf!("Imported “{name}”", name = p.name);
+                        pick = Some(p);
+                    }
+                    Err(e) => d.preset_message = e,
+                }
+            }
+            if preset_button(app, ui, "export", Icon::Export, tl!("Export the labels to a preset file…"), true)
+                && let Some(path) = app.hooks.pick_save_as.as_mut().and_then(|f| f(tl!("Label Color Presets"), &["json"], &format!("{}.json", labels.preset)))
+            {
+                d.preset_message = match settings::LabelPreset::export(std::path::Path::new(&path), &labels) {
+                    Ok(_) => tlf!("Exported to {path}", path),
+                    Err(e) => e,
+                };
+            }
+            if preset_button(app, ui, "folder", Icon::Folder, tl!("Show the presets folder"), folder.is_some())
+                && let Some(dir) = &folder
+            {
+                let ctx = ui.ctx().clone();
+                if let Err(e) = std::fs::create_dir_all(dir)
+                    .map_err(|e| e.to_string())
+                    .and_then(|()| super::menu_dialogs::open_path(app, &ctx, &dir.to_string_lossy(), false))
+                {
+                    d.preset_message = e;
+                }
+            }
+            let user = selected.filter(|p| p.name != settings::DEFAULT_LABEL_PRESET);
+            if preset_button(app, ui, "delete", Icon::Trash, tl!("Delete this preset"), user.is_some())
+                && let Some(p) = user
+            {
+                d.label_presets = None;
+                d.preset_message = match app.session.delete_label_preset(&p.name) {
+                    Ok(()) => {
+                        put(&mut d.values, "labels.preset", json!(settings::DEFAULT_LABEL_PRESET));
+                        tlf!("Deleted preset “{active}”", active = p.name)
+                    }
+                    Err(e) => e,
+                };
+            }
+        });
+        if !d.preset_message.is_empty() {
+            note(ui, &t, &d.preset_message);
+        }
+    });
+    if let Some(p) = pick {
+        let mut labels = labels;
+        p.apply(&mut labels);
+        if let Ok(v) = serde_json::to_value(&labels) {
+            put(&mut d.values, "labels", v);
+        }
+    }
+}
+
+/// An icon button of the Label Color Presets row (`settings.labelPresets.<id>`).
+fn preset_button(app: &mut FilmcraftApp, ui: &mut Ui, id: &str, icon: Icon, tip: &str, enabled: bool) -> bool {
+    let t = app.tokens;
+    let r = ui.add_enabled_ui(enabled, |ui| crate::icons::button(ui, icon, 24.0, false, &t, tip)).inner;
+    app.auto.add(&format!("settings.labelPresets.{id}"), r.rect, tip);
+    r.clicked()
+}
+
 fn note(ui: &mut Ui, t: &Tokens, text: &str) {
     ui.add(egui::Label::new(RichText::new(crate::i18n::t(text)).size(11.5).color(t.text_dim)).wrap());
 }
@@ -619,6 +713,7 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             );
         }
         "appearanceModes" => appearance_modes(app, ui, d),
+        "labelPresets" => label_presets(app, ui, d),
         "autoSaveStatus" => {
             let status = app.session.execute("file.autoSaveStatus", json!({})).unwrap_or_default();
             if let Some(dir) = status["autoSaveDir"].as_str() {
@@ -643,25 +738,19 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
 
 fn rows(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, list: &[Row]) {
     let t = app.tokens;
-    let mut skip = false;
     for (i, r) in list.iter().enumerate() {
-        if std::mem::take(&mut skip) {
-            continue;
-        }
-        // Labels: Label Colors on the left, the row after it (Label Defaults) on the right
+        // Labels: Label Colors on the left, the rest of the page (Label Defaults, Label Color
+        // Presets) on the right
         if matches!(r, Row::Custom("labelColors")) {
-            let next = list.get(i + 1).copied();
+            let rest = list.get(i + 1..).unwrap_or_default();
             ui.horizontal_top(|ui| {
                 ui.allocate_ui(vec2(250.0, 0.0), |ui| {
                     ui.vertical(|ui| custom(app, ui, d, "labelColors"));
                 });
                 ui.add_space(12.0);
-                if let Some(n) = next {
-                    ui.vertical(|ui| rows(app, ui, d, &[n]));
-                }
+                ui.vertical(|ui| rows(app, ui, d, rest));
             });
-            skip = true;
-            continue;
+            break;
         }
         match r {
             Row::Field(f) if APPEARANCE_KEYS.contains(&f.key) => continue,

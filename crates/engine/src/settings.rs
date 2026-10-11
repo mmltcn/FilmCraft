@@ -326,11 +326,17 @@ impl Default for LabelDefaults {
 pub struct LabelPrefs {
     pub colors: BTreeMap<String, LabelColor>,
     pub defaults: LabelDefaults,
+    /// Label Color Presets: the preset the names and colours were last taken from.
+    pub preset: String,
 }
 
 impl Default for LabelPrefs {
     fn default() -> Self {
-        Self { colors: Label::ALL.iter().map(|l| (label_id(*l), default_label_color(*l))).collect(), defaults: LabelDefaults::default() }
+        Self {
+            colors: Label::ALL.iter().map(|l| (label_id(*l), default_label_color(*l))).collect(),
+            defaults: LabelDefaults::default(),
+            preset: DEFAULT_LABEL_PRESET.into(),
+        }
     }
 }
 
@@ -386,6 +392,164 @@ impl LabelPrefs {
             c.name = c.name.chars().take(64).collect();
         }
         self.colors.retain(|k, _| Label::ALL.iter().any(|l| label_id(*l) == *k));
+        self.preset = self.preset.chars().take(LABEL_NAME_MAX).collect();
+    }
+}
+
+/// The label colour preset FilmCraft ships with: the labels' own names and colours.
+pub const DEFAULT_LABEL_PRESET: &str = "Default";
+/// The folder of label colour presets, beside `preferences.json`.
+pub const LABEL_PRESETS_DIR: &str = "Label Presets";
+/// Largest label preset file read; a real one is under 2 KiB.
+const LABEL_PRESET_MAX_BYTES: u64 = 64 * 1024;
+/// Longest preset or label name, in characters.
+const LABEL_NAME_MAX: usize = 64;
+/// Most files looked at in the presets folder.
+const LABEL_PRESETS_MAX: usize = 500;
+
+/// A label colour preset (Settings ▸ Labels ▸ Label Color Presets), shared between editors as a
+/// small JSON file: its name and the 16 labels' names and colours, in [`Label::ALL`] order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LabelPreset {
+    pub name: String,
+    pub labels: Vec<PresetLabel>,
+}
+
+/// One label of a [`LabelPreset`]. A file must give both fields.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PresetLabel {
+    pub name: String,
+    /// `#rrggbb`.
+    pub color: String,
+}
+
+impl LabelPreset {
+    /// The built-in preset ([`DEFAULT_LABEL_PRESET`]).
+    pub fn builtin() -> Self {
+        Self::from_prefs(DEFAULT_LABEL_PRESET, &LabelPrefs::default())
+    }
+
+    /// `labels`' names and colours as a preset called `name`.
+    pub fn from_prefs(name: &str, labels: &LabelPrefs) -> Self {
+        let entry = |l: Label| labels.colors.get(&label_id(l)).cloned().unwrap_or_else(|| default_label_color(l));
+        Self { name: name.into(), labels: Label::ALL.iter().map(|l| entry(*l)).map(|c| PresetLabel { name: c.name, color: c.color }).collect() }
+    }
+
+    /// Whether `labels` has exactly this preset's names and colours.
+    pub fn matches(&self, labels: &LabelPrefs) -> bool {
+        Self::from_prefs(&self.name, labels) == *self
+    }
+
+    /// Give `labels` this preset's names and colours (the label defaults stay) and select it.
+    pub fn apply(&self, labels: &mut LabelPrefs) {
+        for (l, p) in Label::ALL.iter().zip(&self.labels) {
+            labels.colors.insert(label_id(*l), LabelColor { name: p.name.clone(), color: p.color.clone() });
+        }
+        labels.preset = self.name.clone();
+    }
+
+    /// Check a preset file: at most 64 KiB of JSON with a name and exactly 16 labels, each with a
+    /// name (trimmed, at most 64 characters) and a `#rrggbb` colour.
+    pub fn parse(bytes: &[u8]) -> std::result::Result<Self, String> {
+        if bytes.len() as u64 > LABEL_PRESET_MAX_BYTES {
+            return Err("the file is too large to be a label color preset".into());
+        }
+        let mut p: Self = serde_json::from_slice(bytes).map_err(|e| format!("not a label color preset: {e}"))?;
+        p.name = p.name.trim().to_string();
+        if p.name.is_empty() || p.name.chars().count() > LABEL_NAME_MAX {
+            return Err(format!("the preset needs a name of 1 to {LABEL_NAME_MAX} characters"));
+        }
+        if p.labels.len() != Label::ALL.len() {
+            return Err(format!("a label color preset has {} labels; this file has {}", Label::ALL.len(), p.labels.len()));
+        }
+        for (i, l) in p.labels.iter_mut().enumerate() {
+            l.name = l.name.trim().to_string();
+            if l.name.chars().count() > LABEL_NAME_MAX {
+                return Err(format!("label {}: the name is longer than {LABEL_NAME_MAX} characters", i + 1));
+            }
+            let rgb = l.color.strip_prefix('#').and(parse_hex(&l.color)).ok_or_else(|| format!("label {}: the color is not like #2f6bdf", i + 1))?;
+            l.color = hex(rgb);
+        }
+        Ok(p)
+    }
+
+    /// Read and check a preset file ([`LabelPreset::parse`]).
+    pub fn read(path: &Path) -> std::result::Result<Self, String> {
+        use std::io::Read as _;
+        let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut bytes = Vec::new();
+        file.take(LABEL_PRESET_MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::parse(&bytes)
+    }
+
+    pub fn write(&self, path: &Path) -> std::result::Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        filmcraft_format::atomic_write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Save `labels`' names and colours to `path` as a preset named after the file.
+    pub fn export(path: &Path, labels: &LabelPrefs) -> std::result::Result<Self, String> {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().trim().chars().take(LABEL_NAME_MAX).collect::<String>()).unwrap_or_default();
+        let p = Self::from_prefs(if stem.is_empty() { "Labels" } else { &stem }, labels);
+        p.write(path)?;
+        Ok(p)
+    }
+}
+
+impl Session {
+    /// The label colour presets folder (None without a data directory, e.g. tests and the web).
+    pub fn label_presets_dir(&self) -> Option<PathBuf> {
+        self.prefs_path.as_deref().and_then(Path::parent).map(|d| d.join(LABEL_PRESETS_DIR))
+    }
+
+    /// The built-in preset, then the presets in the folder by name with the file each is in.
+    /// Files that fail [`LabelPreset::parse`] and names already taken are left out.
+    pub fn label_presets(&self) -> Vec<(LabelPreset, Option<PathBuf>)> {
+        let mut found: Vec<(LabelPreset, Option<PathBuf>)> = self
+            .label_presets_dir()
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .take(LABEL_PRESETS_MAX)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("json")))
+            .filter_map(|p| LabelPreset::read(&p).ok().map(|preset| (preset, Some(p))))
+            .collect();
+        found.sort_by_key(|(p, _)| p.name.to_lowercase());
+        let mut out = vec![(LabelPreset::builtin(), None)];
+        for f in found {
+            if !out.iter().any(|(p, _)| p.name.eq_ignore_ascii_case(&f.0.name)) {
+                out.push(f);
+            }
+        }
+        out
+    }
+
+    /// Copy the preset file at `path` into the presets folder, replacing a preset of the same
+    /// name, and return it. One named like the built-in preset becomes "<name> (imported)".
+    pub fn import_label_preset(&self, path: &Path) -> std::result::Result<LabelPreset, String> {
+        let mut p = LabelPreset::read(path)?;
+        if p.name.eq_ignore_ascii_case(DEFAULT_LABEL_PRESET) {
+            p.name = format!("{} (imported)", p.name);
+        }
+        let dir = self.label_presets_dir().ok_or("there is no presets folder in this session")?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for (old, file) in self.label_presets() {
+            if let Some(file) = file.filter(|_| old.name.eq_ignore_ascii_case(&p.name)) {
+                std::fs::remove_file(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            }
+        }
+        let safe: String = p.name.chars().map(|c| if c.is_alphanumeric() || " -_()".contains(c) { c } else { '_' }).collect();
+        p.write(&dir.join(format!("{}.json", safe.trim())))?;
+        Ok(p)
+    }
+
+    /// Delete a preset from the presets folder (the built-in one can't be deleted).
+    pub fn delete_label_preset(&self, name: &str) -> std::result::Result<(), String> {
+        let (_, file) = self.label_presets().into_iter().find(|(p, _)| p.name == name).ok_or_else(|| format!("there is no label color preset “{name}”"))?;
+        let file = file.ok_or("the built-in preset can't be deleted")?;
+        std::fs::remove_file(&file).map_err(|e| format!("{}: {e}", file.display()))
     }
 }
 
@@ -967,6 +1131,7 @@ static CATEGORIES: &[Category] = &[
                     f("labels.defaults.captions", "Captions", Kind::Label, false),
                 ],
             ),
+            Row::Custom("labelPresets"),
         ],
     },
     Category {
@@ -1555,10 +1720,41 @@ fn cache_clean(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files, "bytes": bytes, "location": dir.to_string_lossy()}))
 }
 
+fn presets_json(s: &Session) -> Value {
+    let presets: Vec<Value> = s.label_presets().into_iter().map(|(p, file)| json!({"name": p.name, "builtin": file.is_none(), "labels": p.labels})).collect();
+    json!({"dir": s.label_presets_dir(), "selected": s.prefs.labels.preset, "presets": presets})
+}
+
+fn label_presets(s: &mut Session, _: &Value) -> Result<Value> {
+    Ok(presets_json(s))
+}
+
+fn import_label_preset(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_p(p, "path").ok_or_else(|| bad("labels.importPreset", "need `path`"))?;
+    let preset = s.import_label_preset(Path::new(path)).map_err(|e| bad("labels.importPreset", e))?;
+    Ok(json!({"name": preset.name, "presets": presets_json(s)}))
+}
+
+fn export_label_preset(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_p(p, "path").ok_or_else(|| bad("labels.exportPreset", "need `path`"))?;
+    let preset = LabelPreset::export(Path::new(path), &s.prefs.labels).map_err(|e| bad("labels.exportPreset", e))?;
+    Ok(json!({"name": preset.name, "path": path}))
+}
+
+fn delete_label_preset(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_p(p, "name").ok_or_else(|| bad("labels.deletePreset", "need `name`"))?;
+    s.delete_label_preset(name).map_err(|e| bad("labels.deletePreset", e))?;
+    Ok(presets_json(s))
+}
+
 pub fn commands() -> Vec<CommandSpec> {
     vec![
         spec("prefs.schema", "Settings Schema", r#"{"category":str?}"#, schema, false),
         spec("mediaCache.info", "Media Cache Info", "{}", cache_info, false),
         spec("mediaCache.clean", "Delete Media Cache Files", r#"{"all":bool?}"#, cache_clean, true),
+        spec("labels.presets", "Label Color Presets", "{}", label_presets, false),
+        spec("labels.importPreset", "Import Label Color Preset", r#"{"path":str}"#, import_label_preset, true),
+        spec("labels.exportPreset", "Export Label Color Preset", r#"{"path":str}"#, export_label_preset, true),
+        spec("labels.deletePreset", "Delete Label Color Preset", r#"{"name":str}"#, delete_label_preset, true),
     ]
 }

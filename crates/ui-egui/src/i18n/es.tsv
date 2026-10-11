@@ -3562,3 +3562,10 @@
 	Edit Project Notes	Editar notas del proyecto
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	Notas de este proyecto: tareas pendientes, instrucciones, números de fotograma… Se guardan con el proyecto.
 	Use Effect Shutter Angle	Usar el ángulo de obturación del efecto
+	Label Color Presets	Ajustes preestablecidos de color de etiqueta
+	{name} (Modified)	{name} (modificado)
+	Revert to the preset's colors and names	Volver a los colores y nombres del ajuste preestablecido
+	Import a preset file…	Importar un archivo de ajuste preestablecido…
+	Export the labels to a preset file…	Exportar las etiquetas a un archivo de ajuste preestablecido…
+	Show the presets folder	Mostrar la carpeta de ajustes preestablecidos
+	Delete this preset	Eliminar este ajuste preestablecido

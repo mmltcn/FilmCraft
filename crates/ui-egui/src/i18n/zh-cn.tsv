@@ -3540,3 +3540,10 @@
 	Delete Caption Track	删除字幕轨道
 	Delete Caption Tracks	删除多个字幕轨道
 	Delete Empty Caption Tracks	删除空字幕轨道
+	Label Color Presets	标签颜色预设
+	{name} (Modified)	{name}（已修改）
+	Revert to the preset's colors and names	恢复为预设的颜色和名称
+	Import a preset file…	导入预设文件…
+	Export the labels to a preset file…	将标签导出为预设文件…
+	Show the presets folder	显示预设文件夹
+	Delete this preset	删除此预设

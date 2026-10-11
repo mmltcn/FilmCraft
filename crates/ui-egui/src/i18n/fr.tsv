@@ -3545,3 +3545,10 @@
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	Notes pour ce projet : tâches, instructions, numéros d'image… Enregistrées avec le projet.
 	Use Effect Shutter Angle	Utiliser l'angle d'obturation de l'effet
 	Settings	Préférences
+	Label Color Presets	Paramètres prédéfinis de couleur d'étiquette
+	{name} (Modified)	{name} (modifié)
+	Revert to the preset's colors and names	Revenir aux couleurs et aux noms du paramètre prédéfini
+	Import a preset file…	Importer un fichier de paramètre prédéfini…
+	Export the labels to a preset file…	Exporter les étiquettes dans un fichier de paramètre prédéfini…
+	Show the presets folder	Afficher le dossier des paramètres prédéfinis
+	Delete this preset	Supprimer ce paramètre prédéfini

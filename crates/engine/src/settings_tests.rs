@@ -675,3 +675,94 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     }
     assert_eq!(seen, ["auto", "light", "dark", "auto"]);
 }
+
+fn preset_json(name: &str, n: usize, color: &str) -> Vec<u8> {
+    let labels: Vec<Value> = (0..n).map(|i| json!({"name": format!(" Label {i} "), "color": color})).collect();
+    serde_json::to_vec(&json!({"name": name, "labels": labels})).unwrap()
+}
+
+/// Label color preset files are checked strictly: size, exactly 16 labels, names trimmed and
+/// capped, colours `#rrggbb`. A bad file is an error, never a panic or a partial preset.
+#[test]
+fn label_presets_reject_bad_files() {
+    use settings::LabelPreset;
+    let p = LabelPreset::parse(&preset_json("  Team  ", 16, "#A0B0C0")).unwrap();
+    assert_eq!(p.name, "Team");
+    assert_eq!((p.labels[0].name.as_str(), p.labels[0].color.as_str()), ("Label 0", "#a0b0c0"));
+    let builtin = LabelPreset::builtin();
+    assert_eq!(builtin.name, "Default");
+    assert_eq!(builtin.labels.len(), 16);
+    assert!(builtin.matches(&settings::LabelPrefs::default()), "the built-in preset is today's labels");
+    assert_eq!(LabelPreset::parse(&serde_json::to_vec(&builtin).unwrap()).unwrap(), builtin);
+
+    let long = "x".repeat(65);
+    let mut too_big = preset_json("Big", 16, "#000000");
+    too_big.extend(std::iter::repeat_n(b' ', 64 * 1024));
+    for (why, bytes) in [
+        ("15 labels", preset_json("A", 15, "#000000")),
+        ("17 labels", preset_json("A", 17, "#000000")),
+        ("no #", preset_json("A", 16, "000000")),
+        ("not hex", preset_json("A", 16, "#12345g")),
+        ("a colour name", preset_json("A", 16, "red")),
+        ("short", preset_json("A", 16, "#fff")),
+        ("empty name", preset_json("   ", 16, "#000000")),
+        ("long name", preset_json(&long, 16, "#000000")),
+        (
+            "long label",
+            serde_json::to_vec(&json!({"name": "A", "labels": (0..16).map(|_| json!({"name": long, "color": "#000000"})).collect::<Vec<_>>()})).unwrap(),
+        ),
+        ("no colour", serde_json::to_vec(&json!({"name": "A", "labels": (0..16).map(|_| json!({"name": "a"})).collect::<Vec<_>>()})).unwrap()),
+        ("not an object", b"[1,2,3]".to_vec()),
+        ("too big", too_big),
+        ("not utf-8", vec![0xff, 0xfe, 0x00]),
+    ] {
+        assert!(LabelPreset::parse(&bytes).is_err(), "{why} should be refused");
+    }
+    // every truncation of a good file is refused cleanly
+    let good = preset_json("Team", 16, "#102030");
+    for n in 0..good.len() {
+        assert!(LabelPreset::parse(&good[..n]).is_err());
+    }
+}
+
+/// Import copies a preset into `Label Presets` beside the preferences, export writes the current
+/// labels named after the file, and delete removes user presets only. A bad file changes nothing.
+#[test]
+fn label_presets_import_export_and_delete() {
+    let dir = tmp_dir("label-presets");
+    let mut s = Session { prefs_path: Some(dir.join("preferences.json")), ..Session::default() };
+    let names = |s: &mut Session| -> Vec<String> {
+        let v = s.execute("labels.presets", json!({})).unwrap();
+        v["presets"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&mut s), ["Default"]);
+    let src = dir.join("from someone.json");
+    std::fs::write(&src, preset_json("Team", 16, "#102030")).unwrap();
+    let r = s.execute("labels.importPreset", json!({"path": src.to_string_lossy()})).unwrap();
+    assert_eq!(r["name"], "Team");
+    assert!(dir.join("Label Presets").join("Team.json").is_file());
+    assert_eq!(names(&mut s), ["Default", "Team"]);
+
+    // a bad file: an error, and the folder is as it was
+    let bad = dir.join("bad.json");
+    std::fs::write(&bad, preset_json("Bad", 3, "#102030")).unwrap();
+    assert!(s.execute("labels.importPreset", json!({"path": bad.to_string_lossy()})).is_err());
+    std::fs::write(dir.join("Label Presets").join("junk.json"), b"{not json").unwrap();
+    assert_eq!(names(&mut s), ["Default", "Team"], "unreadable files in the folder are skipped");
+
+    // a preset named like the built-in one keeps both
+    std::fs::write(&src, preset_json("default", 16, "#405060")).unwrap();
+    assert_eq!(s.execute("labels.importPreset", json!({"path": src.to_string_lossy()})).unwrap()["name"], "default (imported)");
+
+    // export writes the applied labels, named after the file, and imports back
+    set(&mut s, "labels.colors.rose.color", json!("#123456"));
+    let out = dir.join("Our Labels.json");
+    assert_eq!(s.execute("labels.exportPreset", json!({"path": out.to_string_lossy()})).unwrap()["name"], "Our Labels");
+    let back = settings::LabelPreset::read(&out).unwrap();
+    assert!(back.matches(&s.prefs.labels));
+
+    assert!(s.execute("labels.deletePreset", json!({"name": "Default"})).is_err(), "the built-in preset stays");
+    s.execute("labels.deletePreset", json!({"name": "Team"})).unwrap();
+    assert_eq!(names(&mut s), ["Default", "default (imported)"]);
+    assert!(s.execute("labels.deletePreset", json!({"name": "Team"})).is_err());
+}
