@@ -687,6 +687,22 @@ pub fn draw_group_chrome_details(
                 list_opened = !open;
             }
         }
+        // The wheel over the strip steps through the tabs: down = next, up = previous, one tab
+        // per wheel notch (trackpad scrolling adds up to a notch first), stopping at the ends.
+        let wheel_id = egui::Id::new(("tab-wheel", g.path.clone()));
+        if ui.rect_contains_pointer(strip) && !tabs.is_empty() {
+            const NOTCH: f32 = 40.0;
+            let total = ui.ctx().data(|d| d.get_temp::<f32>(wheel_id)).unwrap_or(0.0) + crate::panels::timeline::wheel_input(ui.ctx()).delta.y;
+            let steps = (total / NOTCH).trunc();
+            ui.ctx().data_mut(|d| d.insert_temp(wheel_id, total - steps * NOTCH));
+            let to = (active_at as i64).saturating_sub(steps as i64).clamp(0, tabs.len() as i64 - 1) as usize;
+            if let Some(tab) = tabs.get(to).filter(|_| to != active_at) {
+                activate(tab, &mut actions);
+                actions.push(DockAction::Focus(tab.panel));
+            }
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<f32>(wheel_id));
+        }
         let mut x = strip.min.x + 12.0;
         // sequence tabs as drawn (for dragging one past its neighbours), and the one being dragged
         let mut seq_rects: Vec<(u64, Rect)> = Vec::new();

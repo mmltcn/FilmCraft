@@ -209,6 +209,63 @@ fn panel_menu_maximize_restores_and_an_empty_dock_reopens() {
     assert!(d.has("panel.tab.Program") && d.has("panel.tab.Timeline"));
 }
 
+/// The wheel over a tab strip switches that group's tab: down = next, up = previous, one tab per
+/// notch, smaller trackpad steps adding up to a notch, stopping at the ends. Over the panel's
+/// content the wheel leaves the tabs alone.
+#[test]
+fn wheel_over_a_tab_strip_switches_tabs() {
+    use filmcraft_ui_egui::dock::{DockNode, PanelKind};
+    fn shown(d: &mut Driver) -> PanelKind {
+        fn find(n: &DockNode) -> Option<PanelKind> {
+            match n {
+                DockNode::Tabs { panels, active } if panels.contains(&PanelKind::Project) => panels.get(*active).copied(),
+                DockNode::Tabs { .. } => None,
+                DockNode::Split { a, b, .. } => find(a).or_else(|| find(b)),
+            }
+        }
+        find(&d.app().ui.dock).unwrap()
+    }
+    fn wheel(d: &mut Driver, dy: f64) {
+        let id = format!("panel.tab.{}", shown(d).id());
+        d.ok("ui.scroll", json!({"id": id, "dy": dy}));
+        d.frames(2);
+    }
+    let mut d = Driver::demo();
+    assert_eq!(shown(&mut d), PanelKind::Project);
+    wheel(&mut d, -40.0);
+    assert_eq!(shown(&mut d), PanelKind::MediaBrowser);
+    wheel(&mut d, 40.0);
+    assert_eq!(shown(&mut d), PanelKind::Project);
+    wheel(&mut d, 120.0);
+    assert_eq!(shown(&mut d), PanelKind::Project, "no wrap past the first tab");
+
+    // a trackpad swipe in small steps moves one tab once the steps add up to a notch
+    let r = d.ok("ui.elements", json!({"prefix": "panel.tab.Project"}))[0]["rect"].clone();
+    let at = egui::pos2((r[0].as_f64().unwrap() + r[2].as_f64().unwrap() / 2.0) as f32, (r[1].as_f64().unwrap() + r[3].as_f64().unwrap() / 2.0) as f32);
+    d.harness.input_mut().events.push(egui::Event::PointerMoved(at));
+    d.frames(1);
+    for step in 0..5 {
+        d.harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -10.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        d.frames(1);
+        let expect = if step < 3 { PanelKind::Project } else { PanelKind::MediaBrowser };
+        assert_eq!(shown(&mut d), expect, "after {} pt", (step + 1) * 10);
+    }
+
+    d.ok("ui.scroll", json!({"id": "panel.MediaBrowser", "dy": -40.0}));
+    d.frames(2);
+    assert_eq!(shown(&mut d), PanelKind::MediaBrowser, "the wheel over the content keeps the tab");
+
+    for _ in 0..10 {
+        wheel(&mut d, -40.0);
+    }
+    assert_eq!(shown(&mut d), PanelKind::History, "no wrap past the last tab");
+}
+
 #[test]
 fn lumetri_scopes_layouts_menu_and_footer() {
     let mut d = Driver::demo();
