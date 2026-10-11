@@ -639,6 +639,25 @@ fn a_51_track_passes_through_a_51_mix_and_folds_into_stereo() {
 }
 
 #[test]
+fn a_51_source_on_a_stereo_track_folds_down_instead_of_dropping_centre_and_surrounds() {
+    // the default after New Sequence From Clip: a 5.1 file on a stereo track in a stereo Mix
+    let mut r = Rig::with_channels(&[chan_dc], 6);
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    let (lo, ro) = (0.1 + k * 0.3 + k * 0.5, 0.2 + k * 0.3 + k * 0.6);
+    let st = mix_all(&r, 0, 256);
+    assert_eq!(st.len(), 2);
+    assert!(close(st[0][9], lo, 1e-6) && close(st[1][9], ro, 1e-6), "BS.775 fold, got {} / {}", st[0][9], st[1][9]);
+    // a six-channel pick folds the picked channels (here the source reversed: Rs, Ls, LFE, C, R, L)
+    r.track(0).items[0].source_channels = vec![5, 4, 3, 2, 1, 0];
+    let st = mix_all(&r, 0, 256);
+    assert!(close(st[0][9], 0.6 + k * 0.4 + k * 0.2, 1e-6) && close(st[1][9], 0.5 + k * 0.4 + k * 0.1, 1e-6));
+    // a stereo pick still plays exactly those two channels
+    r.track(0).items[0].source_channels = vec![2, 4];
+    let st = mix_all(&r, 0, 256);
+    assert!(close(st[0][9], 0.3, 1e-6) && close(st[1][9], 0.5, 1e-6));
+}
+
+#[test]
 fn stereo_track_through_a_51_submix_into_a_stereo_mix() {
     let mut r = Rig::new(&[chan_dc]);
     let sub = r.add_submix("5.1 bus");
