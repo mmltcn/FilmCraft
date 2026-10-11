@@ -606,6 +606,32 @@ fn replace_with_clip_from_source_match_frame_and_bin() {
     assert!(s.execute("clip.replaceFromBin", json!({"item": music.0})).is_err());
 }
 
+/// Match Frame on a reversed clip maps the Source monitor frame through reverse playback, not as
+/// if the clip still ran forward (source 50 at sequence 20 used to become source 69).
+#[test]
+fn replace_from_source_match_frame_on_a_reversed_clip() {
+    let mut s = demo();
+    let rate = s.sequence_rate();
+    s.execute("sequence.linkedSelection", json!({"on": false})).unwrap();
+    let forest = item_named(&s, "Misty_Forest.mp4");
+    s.execute("file.newSequence", json!({"name": "MatchFrameReverse"})).unwrap();
+    s.execute("timeline.place", json!({"item": forest.0, "time": 0})).unwrap();
+    let c = s.active_sequence().unwrap().video_tracks[0].items[0].clone();
+    s.execute("timeline.trim", json!({"clip": c.id.0, "edge": "out", "mode": "regular", "delta": (rate.tick_of(60) - c.duration).0})).unwrap();
+    select(&mut s, &[c.id.0]);
+    s.execute("clip.speedDuration", json!({"speed": 100, "reverse": true, "ripple": false})).unwrap();
+    let got = clip(&s, c.id.0);
+    assert_eq!(rate.frame_at(got.duration), 60);
+    assert!(got.reverse);
+    s.execute("source.open", json!({"item": forest.0})).unwrap();
+    s.execute("playhead.set", json!({"time": rate.tick_of(20).0})).unwrap();
+    s.execute("source.setPlayhead", json!({"frame": 50})).unwrap();
+    s.execute("clip.replaceFromSourceMatchFrame", json!({})).unwrap();
+    let got = clip(&s, c.id.0);
+    assert_eq!(got.source_time_at(rate.tick_of(20)), rate.tick_of(50));
+    assert_ne!(got.source_time_at(rate.tick_of(20)), rate.tick_of(69));
+}
+
 /// Replace With Clip ▸ From Bin restarts the clip at the new item's In point (as Premiere does);
 /// `keepSourceIn` keeps the clip's place in the media instead.
 #[test]
