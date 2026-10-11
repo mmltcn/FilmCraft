@@ -255,6 +255,7 @@ impl FilmcraftApp {
         }
         self.panel_drag(&ctx, &targets);
         panels::panel_menu_popup(self, ui);
+        self.cancel_value_drag(ui.ctx());
     }
 
     fn floating_group(&mut self, ctx: &egui::Context, index: usize, seqs: &dock::SeqTabs, actions: &mut Vec<DockAction>) -> Option<DropTarget<PanelKind>> {
