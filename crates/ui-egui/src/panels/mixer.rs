@@ -106,7 +106,8 @@ pub fn poll_meters(app: &mut FilmcraftApp, ui: &egui::Ui) -> HashMap<u64, Vec<[f
             m[1] = (m[1] - 6.0 * dt).max(-90.0);
         }
     }
-    let live = app.playback.playing || app.session.voiceover.recording();
+    // scrubbing plays through the same mixer, so its grains move the meters too
+    let live = app.playback.playing || app.session.voiceover.recording() || app.scrub.is_open();
     if live {
         for (k, p) in fresh {
             let e = st.entry(k).or_default();
