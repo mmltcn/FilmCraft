@@ -868,6 +868,29 @@ fn color_matte_color_changes_and_undoes() {
     assert!(s.execute("project.matteColor", json!({"item": matte, "color": "green"})).is_err());
 }
 
+/// #918: non-ripple Speed/Duration 200% halves a 100-frame clip; a 10-frame fade-out must
+/// move from frames 90–100 to 40–50 (the new clip end), not stay past the clip.
+#[test]
+fn speed_duration_moves_fade_out_to_the_new_clip_end() {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name": "Speed fade", "video": 1, "audio": 0})).unwrap();
+    let rate = s.sequence_rate();
+    let seconds = rate.tick_of(100).seconds();
+    let matte = s.execute("file.newColorMatte", json!({"color": "#ff0000", "seconds": seconds})).unwrap()["item"].as_u64().unwrap();
+    let c = s.execute("timeline.place", json!({"item": matte, "track": "V1", "seconds": 0.0})).unwrap()["clips"][0].as_u64().unwrap();
+    select(&mut s, &[c]);
+    s.execute("sequence.applyVideoTransition", json!({"edge": "out", "frames": 10})).unwrap();
+    let before = s.active_sequence().unwrap().video_tracks[0].transitions[0].clone();
+    assert_eq!((rate.frame_at(before.start), rate.frame_at(before.end())), (90, 100));
+    s.execute("clip.speedDuration", json!({"speed": 200})).unwrap();
+    let it = clip(&s, c);
+    let fade = &s.active_sequence().unwrap().video_tracks[0].transitions[0];
+    assert_eq!((rate.frame_at(it.start), rate.frame_at(it.end())), (0, 50));
+    assert_eq!((rate.frame_at(fade.start), rate.frame_at(fade.end())), (40, 50));
+    assert_eq!(fade.from, Some(filmcraft_project::ClipId(c)));
+    assert_eq!(fade.to, None);
+}
+
 /// A damaged project whose subclip is its own parent (#66): `media_duration` followed the chain
 /// without a bound and overflowed the stack. It gives up after a few hops now.
 #[test]
