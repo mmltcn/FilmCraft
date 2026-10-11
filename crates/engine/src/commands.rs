@@ -221,6 +221,12 @@ pub(crate) fn checked_u32_p(p: &Value, key: &str, cmd: &str) -> Result<Option<u3
 /// Parse a time from params: `time` (ticks), `frame`, `seconds` or `timecode`, with `prefix`.
 pub(crate) fn time_p(s: &Session, p: &Value, prefix: &str) -> Option<Tick> {
     let rate = s.sequence_rate();
+    let df = s.active_sequence().map(|q| q.settings.drop_frame).unwrap_or(false);
+    time_p_at(p, prefix, rate, df, s.playhead())
+}
+
+/// Same formats as [`time_p`], against an explicit rate (Source monitor, remix duration, …).
+pub(crate) fn time_p_at(p: &Value, prefix: &str, rate: FrameRate, drop_frame: bool, current: Tick) -> Option<Tick> {
     let k = |n: &str| if prefix.is_empty() { n.to_string() } else { format!("{prefix}{}{}", n[..1].to_uppercase(), &n[1..]) };
     if let Some(t) = p.get(k("time")).and_then(Value::as_i64) {
         return Some(Tick(t));
@@ -232,11 +238,17 @@ pub(crate) fn time_p(s: &Session, p: &Value, prefix: &str) -> Option<Tick> {
         return Some(Tick::from_seconds_f64(sec));
     }
     if let Some(tc) = p.get(k("timecode")).and_then(Value::as_str) {
-        let df = s.active_sequence().map(|q| q.settings.drop_frame).unwrap_or(false);
-        let cur = rate.frame_at(s.playhead());
-        return parse_timecode(tc, rate, df, cur).ok().map(|f| rate.tick_of(f));
+        return parse_timecode(tc, rate, drop_frame, rate.frame_at(current)).ok().map(|f| rate.tick_of(f));
     }
     None
+}
+
+/// In/Out / split time on the Source monitor: explicit `time`/`frame`/`seconds`/`timecode`, else the Source playhead.
+pub(crate) fn source_mark_time(s: &Session, p: &Value, item: ItemId) -> Tick {
+    let view = crate::clip_ops::source_view(s, item);
+    let rate = view.as_ref().map(|v| v.rate).unwrap_or_else(|| s.project.item(item).map(|i| i.frame_rate()).unwrap_or_else(|| s.sequence_rate()));
+    let df = s.project.sequence(item).map(|q| q.settings.drop_frame).unwrap_or(false);
+    time_p_at(p, "", rate, df, s.state.source_playhead).unwrap_or(s.state.source_playhead)
 }
 
 pub(crate) fn clip_p(p: &Value, k: &str) -> Option<ClipId> {
@@ -1897,8 +1909,8 @@ fn build() -> Vec<CommandSpec> {
             Ok(json!({"item": item.0}))
         }),
         // ================= Markers =================
-        cmd!("markers.markIn", "Mark In", ["Markers"], Some("I"), r#"{"time":ticks?,"target":"program|source"}"#, always, |s, p| mark(s, p, true)),
-        cmd!("markers.markOut", "Mark Out", ["Markers"], Some("O"), r#"{"time":ticks?,"target":"program|source"}"#, always, |s, p| mark(s, p, false)),
+        cmd!("markers.markIn", "Mark In", ["Markers"], Some("I"), r#"{"time":ticks?,"frame":i64?,"seconds":f64?,"timecode":str?,"target":"program|source"}"#, always, |s, p| mark(s, p, true)),
+        cmd!("markers.markOut", "Mark Out", ["Markers"], Some("O"), r#"{"time":ticks?,"frame":i64?,"seconds":f64?,"timecode":str?,"target":"program|source"}"#, always, |s, p| mark(s, p, false)),
         cmd!("markers.markClip", "Mark Clip", ["Markers"], Some("X"), "{}", has_seq, |s, _| {
             let t = s.playhead();
             let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
@@ -3088,7 +3100,7 @@ fn mark(s: &mut Session, p: &Value, is_in: bool) -> Result<Value> {
     let target_source = str_p(p, "target") == Some("source");
     if target_source {
         let item = s.state.source_item.ok_or_else(|| EngineError::Other("no source clip".into()))?;
-        let t = p.get("time").and_then(Value::as_i64).map(Tick).unwrap_or(s.state.source_playhead);
+        let t = source_mark_time(s, p, item);
         let key = if is_in { "in" } else { "out" };
         return s.execute("project.setMarks", json!({"item": item.0, key: t.0}));
     }

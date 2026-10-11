@@ -31,7 +31,7 @@ use filmcraft_project::{AudioChannels, ClipId, ItemId, Label, Marker, MarkerId, 
 use filmcraft_time::{Tick, TimeRange};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, always, bad, bool_p, clips_p, has_seq, str_p, time_p, track_p, with_links};
+use crate::commands::{CommandSpec, always, bad, bool_p, clips_p, has_seq, source_mark_time, str_p, time_p, track_p, with_links};
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -64,7 +64,7 @@ pub(crate) fn splice(v: &mut Vec<CommandSpec>) {
     }
 }
 
-const SPLIT: &str = r#"{"time":ticks?,"target":"program|source"}"#;
+const SPLIT: &str = r#"{"time":ticks?,"frame":i64?,"seconds":f64?,"timecode":str?,"target":"program|source"}"#;
 
 fn groups() -> Vec<(&'static str, Vec<CommandSpec>)> {
     vec![
@@ -895,7 +895,7 @@ fn mark_split(s: &mut Session, p: &Value, side: Side) -> Result<Value> {
     let label = format!("Mark Split {}", side.label());
     if str_p(p, "target") == Some("source") {
         let item = s.state.source_item.ok_or_else(|| EngineError::Other("no clip in the Source monitor".into()))?;
-        let t = p.get("time").and_then(Value::as_i64).map(Tick).unwrap_or(s.state.source_playhead);
+        let t = source_mark_time(s, p, item);
         let split = s.edit(&label, |pr, _| {
             let it = pr.item_mut(item).ok_or_else(|| EngineError::Other("no such item".into()))?;
             side.set(&mut it.split, t);

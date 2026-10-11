@@ -448,6 +448,26 @@ fn source_split_points_make_l_and_j_cuts() {
     assert!(s.project.item(ItemId(bars)).unwrap().split.audio_in.is_none());
 }
 
+/// #920: Source Mark In/Out and Mark Split honour `frame` / `seconds` / `timecode`, not only `time`.
+#[test]
+fn source_mark_in_out_and_split_honour_frame_seconds_and_timecode() {
+    let (mut s, bars) = fresh();
+    s.execute("source.open", json!({"item": bars})).unwrap();
+    s.execute("source.setPlayhead", json!({"frame": 0})).unwrap();
+    let r = s.project.item(ItemId(bars)).unwrap().frame_rate();
+    assert_eq!(s.state.source_playhead, Tick::ZERO);
+    s.execute("markers.markIn", json!({"target": "source", "frame": 24})).unwrap();
+    let m = s.project.item(ItemId(bars)).unwrap().as_media().unwrap();
+    assert_eq!(m.mark_in, Some(r.tick_of(24)), "frame:24 marks source frame 24, not the playhead");
+    s.execute("markers.markOut", json!({"target": "source", "seconds": 2.0})).unwrap();
+    let m = s.project.item(ItemId(bars)).unwrap().as_media().unwrap();
+    assert_eq!(m.mark_out, Some(Tick::from_seconds_f64(2.0)));
+    s.execute("markers.markSplitVideoIn", json!({"target": "source", "timecode": "00:00:01:00"})).unwrap();
+    assert_eq!(s.project.item(ItemId(bars)).unwrap().split.video_in, Some(r.tick_of(r.as_f64().round() as i64)));
+    s.execute("markers.markSplitAudioOut", json!({"target": "source", "frame": 48})).unwrap();
+    assert_eq!(s.project.item(ItemId(bars)).unwrap().split.audio_out, Some(r.tick_of(48)));
+}
+
 #[test]
 fn range_and_chapter_markers() {
     let mut s = demo();
