@@ -152,6 +152,10 @@ struct State {
     bytes: usize,
     /// When a frame was last asked of this cache.
     last_used: Instant,
+    /// Presentation pts of the frame the last request wanted: eviction keeps a window around it
+    /// (not around the newest decoded picture). Walking a long GOP dumps pictures in decode
+    /// order; a window around those would throw away the playhead frame and force another walk.
+    pin: i64,
     /// Only background requests (thumbnails, [`filmcraft_media::cancel::with_background`]) have
     /// used the decoder since it was made: it is given up as soon as another background request
     /// is done, whatever the caches' recency.
@@ -457,6 +461,7 @@ impl GopCache {
                 drafts: Default::default(),
                 bytes: 0,
                 last_used: Instant::now(),
+                pin: i64::MIN,
                 background: false,
             }),
             pool: pool.clone(),
@@ -509,10 +514,19 @@ impl GopCache {
             st.bytes -= old.byte_size();
             filmcraft_frame::pool::recycle(old);
         }
-        // evict frames far from the most recent (keep a window around the working position)
+        // Evict frames far from the request (pin), not the newest decode. A frame-threaded
+        // decoder can emit a burst past the playhead; pivoting on those pts used to drop the
+        // wanted picture and walk the GOP again.
+        let pivot = if st.pin != i64::MIN { st.pin } else { pts };
         while st.bytes > budget && st.frames.len() > 2 {
             let (Some(&first), Some(&last)) = (st.frames.keys().next(), st.frames.keys().next_back()) else { break };
-            let victim = if pts - first > last - pts { first } else { last };
+            let mut victim = if pivot - first > last - pivot { first } else { last };
+            if victim == pivot || victim == pts {
+                victim = if victim == first { last } else { first };
+                if victim == pivot || victim == pts {
+                    break;
+                }
+            }
             if let Some(v) = st.frames.remove(&victim) {
                 st.drafts.remove(&victim);
                 st.bytes -= v.byte_size();
@@ -583,6 +597,7 @@ impl GopCache {
         let mut st = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let _decoding = DecodingGuard::enter(me);
         st.last_used = Instant::now();
+        st.pin = want_pts;
         let background = filmcraft_media::cancel::background();
         if let Some(f) = st.cached(want_pts, draft).cloned() {
             HITS.fetch_add(1, Ordering::Relaxed);
@@ -1363,5 +1378,91 @@ mod tests {
             assert_eq!(index_of(&c.frame(&s, d as i64 * 1000).expect("frame")), d);
         }
         assert_eq!(s.resets.load(Ordering::Relaxed), 1);
+    }
+
+    /// Many pictures in one GOP; a decoder that emits a burst past the wanted sample (frame-
+    /// threaded H.264). Eviction used to pivot on the newest pts and drop the playhead frame.
+    struct Burst {
+        n: usize,
+        /// Pictures held before a decode dumps them all.
+        burst: usize,
+        held: VecDeque<i64>,
+        resets: Arc<AtomicUsize>,
+        decodes: Arc<AtomicUsize>,
+    }
+
+    impl VideoDecoder for Burst {
+        fn decode(&mut self, _sample: &[u8], pts: i64) -> crate::Result<Vec<DecodedFrame>> {
+            self.decodes.fetch_add(1, Ordering::Relaxed);
+            self.held.push_back(pts);
+            if self.held.len() < self.burst {
+                return Ok(Vec::new());
+            }
+            Ok(self.held.drain(..).map(|p| picture((p, false))).collect())
+        }
+        fn flush(&mut self) -> Vec<DecodedFrame> {
+            self.held.drain(..).map(|p| picture((p, false))).collect()
+        }
+        fn reset(&mut self) {
+            self.resets.fetch_add(1, Ordering::Relaxed);
+            self.held.clear();
+        }
+        fn name(&self) -> &str {
+            "burst"
+        }
+    }
+
+    impl VideoSamples for Burst {
+        fn count(&self) -> usize {
+            self.n
+        }
+        fn pts(&self, i: usize) -> i64 {
+            i as i64 * 1000
+        }
+        fn sync_before(&self, _i: usize) -> usize {
+            0
+        }
+        fn sample_at(&self, t: i64) -> Option<usize> {
+            let i = (t / 1000) as usize;
+            (i < self.n).then_some(i)
+        }
+        fn read(&self, i: usize) -> crate::Result<Vec<u8>> {
+            Ok(vec![i as u8])
+        }
+        fn make_decoder(&self) -> crate::Result<Box<dyn VideoDecoder>> {
+            Ok(Box::new(Burst { n: self.n, burst: self.burst, held: VecDeque::new(), resets: self.resets.clone(), decodes: self.decodes.clone() }))
+        }
+    }
+
+    #[test]
+    fn long_gop_seek_keeps_the_target_and_does_not_walk_twice() {
+        let s = Burst { n: 200, burst: 90, held: VecDeque::new(), resets: Default::default(), decodes: Default::default() };
+        let mut c = GopCache::new(None);
+        c.budget = 0;
+        // Want a picture early in the GOP; the burst dumps 90 pictures at once (past MIN_FRAMES).
+        assert_eq!(index_of(&c.frame(&s, 10_000).expect("frame")), 10);
+        assert_eq!(s.resets.load(Ordering::Relaxed), 1);
+        let decodes = s.decodes.load(Ordering::Relaxed);
+        assert!(decodes <= 90 + 1, "walked {decodes} samples");
+        // The wanted picture is still cached: asking again must not restart or re-feed.
+        assert_eq!(index_of(&c.frame(&s, 10_000).expect("cached")), 10);
+        assert_eq!(s.resets.load(Ordering::Relaxed), 1);
+        assert_eq!(s.decodes.load(Ordering::Relaxed), decodes);
+        // Playback continues from the same run.
+        assert_eq!(index_of(&c.frame(&s, 11_000).expect("frame")), 11);
+        assert_eq!(s.resets.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn long_gop_continue_does_not_restart_for_the_next_frame() {
+        let s = samples(300, 250, 8, false);
+        let mut c = GopCache::new(None);
+        c.budget = 0;
+        assert_eq!(index_of(&c.frame(&s, 80_000).expect("frame")), 80);
+        let resets = s.resets.load(Ordering::Relaxed);
+        let decodes = s.decodes.load(Ordering::Relaxed);
+        assert_eq!(index_of(&c.frame(&s, 81_000).expect("frame")), 81);
+        assert_eq!(s.resets.load(Ordering::Relaxed), resets);
+        assert!(s.decodes.load(Ordering::Relaxed) - decodes <= 8 + 2);
     }
 }

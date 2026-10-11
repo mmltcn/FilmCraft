@@ -585,7 +585,9 @@ impl FrameServer {
             // the frame due now; once the clock runs, the frames before it are late
             self.request_job(key, rate.tick_of(key.frame), scale, project, 0, false, (!preroll && dir > 0).then_some(Tick::ZERO));
         }
-        let ahead = prefetch_depth(speed);
+        // During preroll the clock has not started: only the frames that gate start, not a
+        // prefetch run that walks the rest of a LongGOP and evicts the playhead pictures.
+        let ahead = if preroll { (PREROLL_FRAMES - 1).max(0) } else { prefetch_depth(speed) };
         for i in 0..ahead {
             let f = key.frame + (lead + i * stride) * dir * step;
             if f >= 0 {
