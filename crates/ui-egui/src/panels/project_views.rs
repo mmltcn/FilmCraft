@@ -262,6 +262,13 @@ fn item_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: ItemId, kind: &ItemK
             }
         }
     });
+    let can_reveal = app.session.project.resolve_media(id).is_some_and(|(_, m, _)| matches!(m.media, filmcraft_project::MediaRef::File { .. }));
+    let b = ui.add_enabled(can_reveal, egui::Button::new(tl!("Reveal in Finder")));
+    app.auto.add("project.itemMenu.file.reveal", b.rect, "Reveal in Finder");
+    if b.clicked() {
+        actions.push(("file.reveal".into(), json!({"items": [id.0]})));
+        ui.close();
+    }
     if matches!(kind, ItemKind::Media(m) if matches!(m.media, filmcraft_project::MediaRef::File { .. })) {
         ui.separator();
         for (label, cmd) in [(tl!("Link Media…"), "media.linkMedia"), (tl!("Make Offline…"), "media.makeOffline")] {

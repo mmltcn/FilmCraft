@@ -319,6 +319,7 @@ fn open_path(path: &str, reveal: bool) -> Result<(), String> {
         }
         c
     } else {
+        // Linux file managers have no select-file flag: open the parent folder instead.
         let mut c = std::process::Command::new("xdg-open");
         let p = std::path::Path::new(path);
         c.arg(if reveal { p.parent().unwrap_or(p) } else { p });

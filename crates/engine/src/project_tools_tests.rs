@@ -362,6 +362,18 @@ fn edit_original_update_metadata_and_clip_items() {
 }
 
 #[test]
+fn file_reveal_enabled_for_imported_clip() {
+    let dir = tmp_dir("reveal");
+    let path = dir.join("take.mp4");
+    make_movie(&path, DemoScene::Aurora, 64, 36, 8);
+    let (mut s, items, _) = session_with(&[&path]);
+    assert!(!s.is_enabled("file.reveal"), "disabled with no Project panel selection");
+    s.execute("project.select", json!({"items": [items[0].0]})).unwrap();
+    assert!(s.is_enabled("file.reveal"));
+    assert_eq!(s.execute("file.reveal", json!({})).unwrap()["paths"], json!([path.to_string_lossy()]));
+}
+
+#[test]
 fn edit_offline_sets_the_log_fields() {
     let mut s = demo();
     let r = s.execute("file.newOfflineFile", json!({"name": "Missing Take", "seconds": 4.0})).unwrap();

@@ -3,8 +3,8 @@
 //! Update Metadata, Automate to Sequence, Scene Edit Detection, Normalize Mix Track, Simplify
 //! Sequence, Transcribe Sequence, Save as Template, Add Flash Cue Marker and the System
 //! Compatibility Report; plus the frontend side of Edit Original / Reveal Log Files (the OS
-//! opener), Generate Audio Waveform (the timeline's peak cache), Import from Media Browser (the
-//! Media Browser selection) and View ▸ Dynamic Audio Waveforms.
+//! opener), Reveal in Finder, Generate Audio Waveform (the timeline's peak cache), Import from
+//! Media Browser (the Media Browser selection) and View ▸ Dynamic Audio Waveforms.
 //!
 //! The open dialog lives in `UiState::extras.dialog` (serde, like `clip_dialogs`): the engine
 //! command it runs and the parameters being edited, so agents open it from the menu, change
@@ -185,11 +185,12 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
             app.ui.extras.dialog = Some(ClipDialogDraft { command: id.into(), params: json!({}), info: report.clone(), error: String::new() });
             return Some(Ok(json!({"dialog": "systemReport", "report": report})));
         }
-        "edit.editOriginal" => {
+        "edit.editOriginal" | "file.reveal" => {
+            let reveal = id == "file.reveal";
             let r = app.session.execute(id, params.clone()).map_err(|e| e.to_string());
             return Some(r.and_then(|v| {
                 for p in v["paths"].as_array().cloned().unwrap_or_default() {
-                    open_path(app, ctx, p.as_str().unwrap_or_default(), false)?;
+                    open_path(app, ctx, p.as_str().unwrap_or_default(), reveal)?;
                 }
                 Ok(v)
             }));
