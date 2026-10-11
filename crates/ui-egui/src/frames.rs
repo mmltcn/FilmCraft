@@ -263,7 +263,7 @@ struct JobProvider {
 
 impl filmcraft_render::SourceProvider for JobProvider {
     fn source(&self, item: ItemId) -> Option<filmcraft_media::SharedSource> {
-        let s = self.inner.source(item)?;
+        let s = self.inner.pool.monitor_source(item, self.inner.source(item)?);
         Some(Arc::new(TimedSource(s)))
     }
 }
