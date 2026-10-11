@@ -1197,10 +1197,19 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
         if hrect.height() >= 40.0 {
             p.text(pos2(hrect.min.x + 94.0, hrect.min.y + 34.0), Align2::LEFT_CENTER, &tr.name, Tokens::ui(11.0), t.text_dim);
         }
-        // resize track height by dragging the header's bottom edge
-        let edge = Rect::from_min_max(pos2(hrect.min.x, hrect.max.y - 3.0), pos2(hrect.max.x, hrect.max.y + 2.0)).intersect(visible);
-        if edge.height() > 0.0 {
-            let eresp = ui.interact(edge, egui::Id::new(("trackh", r.track.0)), Sense::drag());
+        // resize track height by dragging the header's bottom edge, or the outer edge of the top video
+        // track or the last audio track, which also reaches into the empty space past it
+        let header_column = Rect::from_min_max(pos2(hrect.min.x, clip_rect.min.y), pos2(hrect.max.x, clip_rect.max.y));
+        let last_audio = r.kind == TrackKind::Audio && r.index + 1 == seq.audio_tracks.len();
+        let bottom = Rect::from_min_max(pos2(hrect.min.x, hrect.max.y - 3.0), pos2(hrect.max.x, hrect.max.y + 2.0));
+        let top = (r.kind == TrackKind::Video && r.index + 1 == seq.video_tracks.len())
+            .then(|| ("resizeTop", Rect::from_min_max(pos2(hrect.min.x, hrect.min.y - 2.0), pos2(hrect.max.x, hrect.min.y + 3.0)).intersect(header_column)));
+        for (name, edge) in std::iter::once(("resize", bottom.intersect(if last_audio { header_column } else { visible }))).chain(top) {
+            if edge.height() <= 0.0 {
+                continue;
+            }
+            app.auto.add(&format!("timeline.track.{label}.{name}"), edge, "Drag to change the track height");
+            let eresp = ui.interact(edge, egui::Id::new(("trackh", name, r.track.0)), Sense::drag());
             if eresp.hovered() || eresp.dragged() {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
             }
