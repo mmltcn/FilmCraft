@@ -862,6 +862,44 @@ fn extreme_bitrates_do_not_overflow_encoder_setup() {
 }
 
 #[test]
+fn tiff_size_estimate_tracks_alpha_and_real_output() {
+    let (project, sequence, sources) = matte([0.0, 0.0, 1.0, 0.5], 320, 180, None);
+    let rate = FrameRate::FPS_24;
+    let duration = rate.tick_of(1);
+    for alpha in [false, true] {
+        let dir = Scratch::new(&format!("tiff-size-{alpha}"));
+        let mut settings = ExportSettings {
+            format: Format::TiffSequence,
+            path: dir.path("frame.tif"),
+            alpha,
+            ..Default::default()
+        };
+        settings.range = Some(TimeRange::new(Tick::ZERO, duration));
+        settings.validate().unwrap();
+
+        let expected = 320_u64 * 180 * if alpha { 4 } else { 3 };
+        let summary = settings.summary(320, 180, rate, 48_000, duration);
+        assert_eq!(summary.estimated_bytes, expected, "alpha={alpha}");
+        assert_eq!(settings.estimate_bytes(320, 180, rate, 48_000, duration), expected);
+        let result = export(&project, sequence, &settings, &sources, &Progress::default()).unwrap();
+        assert_eq!(result.frames, 1);
+        let paths = files_in(&dir.0);
+        assert_eq!(paths.len(), 1, "{paths:?}");
+        let actual_bytes = std::fs::metadata(dir.0.join(&paths[0])).unwrap().len();
+        assert!(actual_bytes.abs_diff(summary.estimated_bytes) < 1024, "alpha={alpha}: estimate={} actual={actual_bytes}", summary.estimated_bytes);
+    }
+
+    // Other uncompressed formats already have the correct channel policy.
+    for format in [Format::BmpSequence, Format::TgaSequence] {
+        let rgb = ExportSettings { format, alpha: false, ..Default::default() };
+        let rgba = ExportSettings { format, alpha: true, ..Default::default() };
+        assert_eq!(rgb.estimate_bytes(320, 180, rate, 48_000, duration), 320 * 180 * 3);
+        let expected = if format == Format::BmpSequence { 3 } else { 4 };
+        assert_eq!(rgba.estimate_bytes(320, 180, rate, 48_000, duration), 320 * 180 * expected);
+    }
+}
+
+#[test]
 fn gpu_rendering_is_off_by_default() {
     assert_eq!(ExportSettings::default().gpu_rendering, crate::GpuRendering::Off);
     // settings saved before the field existed get the default too
