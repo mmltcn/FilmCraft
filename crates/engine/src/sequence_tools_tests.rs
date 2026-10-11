@@ -476,6 +476,40 @@ fn range_and_chapter_markers() {
     assert!(s.active_sequence().unwrap().markers.is_empty());
 }
 
+/// #857: Premiere marker names map to labels; unknown names error (never stored as Green).
+#[test]
+fn marker_colour_maps_premiere_names_and_rejects_unknown() {
+    let mut s = demo();
+    let color = |s: &Session, id: u64| s.active_sequence().unwrap().markers.iter().find(|m| m.id.0 == id).unwrap().color;
+    let id = s.execute("markers.add", json!({"frame": 1, "color": "Red"})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, id), Label::Rose);
+    let id = s.execute("markers.add", json!({"frame": 2, "color": "orange"})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, id), Label::Mango);
+    let id = s.execute("markers.add", json!({"frame": 3, "color": "Cyan"})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, id), Label::Teal);
+    let id = s.execute("markers.add", json!({"frame": 4, "color": "Pink"})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, id), Label::Magenta);
+    let id = s.execute("markers.add", json!({"frame": 5, "color": "Rose"})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, id), Label::Rose);
+    let id = s.execute("markers.add", json!({"frame": 6})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, id), Label::Green, "omitted colour stays the default");
+    let before = s.project.to_json();
+    let err = s.execute("markers.add", json!({"frame": 7, "color": "NotAColor"})).unwrap_err().to_string();
+    assert!(err.contains("unknown colour `NotAColor`"), "{err}");
+    assert!(err.contains("Rose") && err.contains("Red"), "lists accepted names: {err}");
+    assert_eq!(s.project.to_json(), before);
+    let white = s.execute("markers.add", json!({"frame": 8, "color": "White"})).unwrap_err().to_string();
+    assert!(white.contains("unknown colour `White`"), "{white}");
+    let rid = s.execute("markers.addRange", json!({"durationFrames": 4, "color": "Red"})).unwrap()["marker"].as_u64().unwrap();
+    assert_eq!(color(&s, rid), Label::Rose);
+    assert!(s.execute("markers.addRange", json!({"durationFrames": 4, "color": "Nope"})).is_err());
+    let id = s.execute("markers.add", json!({"frame": 20, "color": "Green"})).unwrap()["marker"].as_u64().unwrap();
+    s.execute("markers.edit", json!({"marker": id, "color": "Red"})).unwrap();
+    assert_eq!(color(&s, id), Label::Rose);
+    assert!(s.execute("markers.edit", json!({"marker": id, "color": "NotAColor"})).is_err());
+    assert_eq!(color(&s, id), Label::Rose);
+}
+
 #[test]
 fn ripple_sequence_markers_follow_ripple_edits() {
     let mut s = demo();

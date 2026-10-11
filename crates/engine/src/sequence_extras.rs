@@ -487,7 +487,7 @@ fn add_flash_cue(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.active_sequence().map(|q| q.markers.iter().filter(|m| m.kind == MarkerKind::FlashCue).count()).unwrap_or(0) + 1;
     let name = str_p(p, "name").map(str::to_string).unwrap_or_else(|| format!("Cue Point {n}"));
     let comment = str_p(p, "comment").unwrap_or("").to_string();
-    let color = str_p(p, "color").and_then(Label::from_name).unwrap_or(Label::Green);
+    let color = crate::commands::marker_color_p(p, "markers.addFlashCue")?.unwrap_or(Label::Green);
     let dur = u64_p(p, "durationFrames").map(|f| s.sequence_rate().tick_of(f as i64)).unwrap_or(Tick::ZERO);
     let id = s.edit_sequence("Add Flash Cue Marker", |q, ctx, _| {
         let id = MarkerId(ctx.alloc());

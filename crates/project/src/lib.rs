@@ -153,6 +153,19 @@ impl Label {
     pub fn from_name(s: &str) -> Option<Label> {
         Self::ALL.iter().copied().find(|l| l.name().eq_ignore_ascii_case(s))
     }
+    /// Premiere marker chip names that map onto a label (Markers panel / `markers.add` `color`).
+    pub const PREMIERE_MARKER_ALIASES: [(&'static str, Label); 4] =
+        [("Red", Label::Rose), ("Orange", Label::Mango), ("Cyan", Label::Teal), ("Pink", Label::Magenta)];
+    /// Palette name, or a Premiere marker name with a clear equivalent (`Red` → Rose, …).
+    pub fn from_marker_name(s: &str) -> Option<Label> {
+        Self::from_name(s).or_else(|| Self::PREMIERE_MARKER_ALIASES.iter().find(|(n, _)| n.eq_ignore_ascii_case(s)).map(|(_, l)| *l))
+    }
+    /// Names accepted by marker `color` (labels, then Premiere aliases).
+    pub fn accepted_colour_names() -> String {
+        let labels = Self::ALL.map(|l| l.name()).join(", ");
+        let aliases = Self::PREMIERE_MARKER_ALIASES.map(|(n, _)| n).join(", ");
+        format!("{labels}; Premiere: {aliases}")
+    }
 }
 
 /// Where an item's pixels/samples come from.
@@ -1817,6 +1830,21 @@ mod tests {
         );
         let seq = p.new_sequence("Sequence 01", SequenceSettings::default(), 3, 3, None);
         (p, clip, seq)
+    }
+
+    #[test]
+    #[test]
+    fn marker_colour_aliases_map_premiere_chips() {
+        assert_eq!(Label::from_marker_name("Red"), Some(Label::Rose));
+        assert_eq!(Label::from_marker_name("orange"), Some(Label::Mango));
+        assert_eq!(Label::from_marker_name("CYAN"), Some(Label::Teal));
+        assert_eq!(Label::from_marker_name("Pink"), Some(Label::Magenta));
+        assert_eq!(Label::from_marker_name("Rose"), Some(Label::Rose));
+        assert_eq!(Label::from_name("Red"), None);
+        assert_eq!(Label::from_marker_name("White"), None);
+        assert_eq!(Label::from_marker_name("NotAColor"), None);
+        let names = Label::accepted_colour_names();
+        assert!(names.contains("Rose") && names.contains("Red"));
     }
 
     #[test]
