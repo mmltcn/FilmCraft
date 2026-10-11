@@ -185,6 +185,18 @@ pub(crate) fn named_items(s: &Session, spec: &CommandSpec, p: &Value) -> Option<
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
+/// A marker's `color` param: absent (or null) is `None`; anything but a label name is an error
+/// that lists the accepted names, instead of silently becoming Green (#857).
+pub(crate) fn marker_color_p(p: &Value, cmd: &str) -> Result<Option<Label>> {
+    let v = match p.get("color") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(v) => v,
+    };
+    v.as_str().and_then(Label::from_name).map(Some).ok_or_else(|| {
+        let names: Vec<&str> = Label::ALL.iter().map(|l| l.name()).collect();
+        bad(cmd, format!("unknown marker color {v}; use one of: {}", names.join(", ")))
+    })
+}
 pub(crate) fn str_p<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
     p.get(k).and_then(Value::as_str)
 }
@@ -2002,7 +2014,7 @@ fn build() -> Vec<CommandSpec> {
                 let t = time_p(s, p, "").unwrap_or(ph);
                 let name = str_p(p, "name").unwrap_or("").to_string();
                 let comment = str_p(p, "comment").unwrap_or("").to_string();
-                let color = str_p(p, "color").and_then(Label::from_name).unwrap_or(Label::Green);
+                let color = marker_color_p(p, "markers.add")?.unwrap_or(Label::Green);
                 let dur = p.get("durationFrames").and_then(Value::as_i64).map(|f| s.sequence_rate().tick_of(f)).unwrap_or_default();
                 let id = s.edit_sequence("Add Marker", |q, ctx, _| {
                     let id = MarkerId(ctx.alloc());
@@ -2078,6 +2090,7 @@ fn build() -> Vec<CommandSpec> {
                 }
                 let id = u64_p(p, "marker").map(MarkerId).ok_or_else(|| bad("markers.edit", "need `marker`"))?;
                 let rate = s.sequence_rate();
+                let color = marker_color_p(p, "markers.edit")?;
                 let p = p.clone();
                 s.edit_sequence("Edit Marker", |q, _, _| {
                     let m = q.markers.iter_mut().find(|m| m.id == id).ok_or_else(|| bad("markers.edit", "no such marker"))?;
@@ -2087,7 +2100,7 @@ fn build() -> Vec<CommandSpec> {
                     if let Some(c) = str_p(&p, "comment") {
                         m.comment = c.into();
                     }
-                    if let Some(c) = str_p(&p, "color").and_then(Label::from_name) {
+                    if let Some(c) = color {
                         m.color = c;
                     }
                     if let Some(f) = p.get("durationFrames").and_then(Value::as_i64) {
