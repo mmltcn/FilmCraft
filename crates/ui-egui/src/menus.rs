@@ -847,8 +847,38 @@ fn menu_level(
 /// Only Edit ▸ Label choices get a swatch. Other commands keep their usual menu layout.
 fn label_menu_swatch(id: &str, labels: &filmcraft_engine::settings::LabelPrefs) -> Option<egui::Color32> {
     let label = id.strip_prefix("edit.label.").and_then(filmcraft_project::Label::from_name)?;
-    let [r, g, b] = labels.rgb(label);
-    Some(egui::Color32::from_rgb(r, g, b))
+    Some(label_color(labels, label))
+}
+
+/// The user's colour for label `l` (Preferences ▸ Labels), else the built-in one.
+pub fn label_color(labels: &filmcraft_engine::settings::LabelPrefs, l: filmcraft_project::Label) -> egui::Color32 {
+    let [r, g, b] = labels.rgb(l);
+    egui::Color32::from_rgb(r, g, b)
+}
+
+/// A label choice in a right-click Label menu (Project panel items, Timeline clips; #786), drawn
+/// as Edit ▸ Label draws it: the user's name for the label with a swatch of its colour in the
+/// left gutter. Registered for automation as `<prefix>.<Label>` (the label's built-in name).
+pub fn label_choice(
+    ui: &mut egui::Ui,
+    auto: &mut crate::automation::Registry,
+    labels: &filmcraft_engine::settings::LabelPrefs,
+    l: filmcraft_project::Label,
+    prefix: &str,
+) -> egui::Response {
+    let name = labels.name(l);
+    let text = crate::i18n::t(&name);
+    let r = ui.button(format!("      {text}"));
+    auto.add(&format!("{prefix}.{}", l.name()), r.rect, text);
+    paint_swatch(ui, r.rect, label_color(labels, l));
+    r
+}
+
+/// A label swatch in the left gutter of the menu row `row`.
+fn paint_swatch(ui: &egui::Ui, row: egui::Rect, color: egui::Color32) {
+    let rect = egui::Rect::from_center_size(row.left_center() + egui::vec2(10.0, 0.0), egui::vec2(12.0, 12.0));
+    ui.painter().rect_filled(rect, 2.0, color);
+    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color), egui::StrokeKind::Inside);
 }
 
 fn menu_entry(ui: &mut egui::Ui, it: &MenuItem, auto: &mut crate::automation::Registry, labels: &filmcraft_engine::settings::LabelPrefs) -> bool {
@@ -862,9 +892,7 @@ fn menu_entry(ui: &mut egui::Ui, it: &MenuItem, auto: &mut crate::automation::Re
     let r = ui.add_enabled(it.enabled, b);
     auto.add(&format!("menu.{}", it.id), r.rect, &it.label);
     if let Some(color) = swatch {
-        let rect = egui::Rect::from_center_size(r.rect.left_center() + egui::vec2(10.0, 0.0), egui::vec2(12.0, 12.0));
-        ui.painter().rect_filled(rect, 2.0, color);
-        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color), egui::StrokeKind::Inside);
+        paint_swatch(ui, r.rect, color);
     }
     if it.checked == Some(true) {
         let c = r.rect.left_center() + egui::vec2(10.0, 0.0);

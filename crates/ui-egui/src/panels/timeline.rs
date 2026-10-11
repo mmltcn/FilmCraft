@@ -2469,14 +2469,17 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             }
             for &(label, cmd) in *group {
                 if cmd == "edit.label" {
-                    ui.menu_button(crate::i18n::t(label), |ui| {
+                    let r = ui.menu_button(crate::i18n::t(label), |ui| {
+                        // the user's label names and colours, as in Edit ▸ Label (#786)
+                        let labels = app.session.prefs.labels.clone();
                         for l in filmcraft_project::Label::ALL {
-                            if ui.button(crate::i18n::t(l.name())).clicked() {
+                            if crate::menus::label_choice(ui, &mut app.auto, &labels, l, "timeline.clipMenu.edit.label").clicked() {
                                 let _ = app.session.execute("edit.label", json!({"label": l.name()}));
                                 ui.close();
                             }
                         }
                     });
+                    app.auto.add("timeline.clipMenu.edit.label", r.response.rect, crate::i18n::t(label));
                     continue;
                 }
                 if cmd == "clip.multicam" {

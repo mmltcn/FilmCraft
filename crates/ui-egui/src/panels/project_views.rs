@@ -253,15 +253,18 @@ fn item_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: ItemId, kind: &ItemK
             ui.close();
         }
     }
-    ui.menu_button(tl!("Label"), |ui| {
+    let r = ui.menu_button(tl!("Label"), |ui| {
+        // the user's label names and colours, as in Edit ▸ Label (#786)
+        let labels = app.session.prefs.labels.clone();
         for l in filmcraft_project::Label::ALL {
-            if ui.button(crate::i18n::t(l.name())).clicked() {
+            if crate::menus::label_choice(ui, &mut app.auto, &labels, l, "project.itemMenu.label").clicked() {
                 actions.push(("project.select".into(), json!({"items": [id.0]})));
                 actions.push(("edit.label".into(), json!({"label": l.name()})));
                 ui.close();
             }
         }
     });
+    app.auto.add("project.itemMenu.label", r.response.rect, tl!("Label"));
     if matches!(kind, ItemKind::Media(m) if matches!(m.media, filmcraft_project::MediaRef::File { .. })) {
         ui.separator();
         for (label, cmd) in [(tl!("Link Media…"), "media.linkMedia"), (tl!("Make Offline…"), "media.makeOffline")] {

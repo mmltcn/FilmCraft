@@ -289,6 +289,24 @@ fn speed_duration_from_the_clip_menu_opens_the_dialog() {
     assert_eq!(got.time_interpolation, filmcraft_project::TimeInterpolation::FrameBlending);
 }
 
+/// #786: the clip's right-click Label menu lists the labels by the user's names (with their
+/// colours, as Edit ▸ Label does) and each choice labels the clip.
+#[test]
+fn the_clip_menu_label_choices_use_the_user_names() {
+    let mut d = Driver::new();
+    let key = filmcraft_engine::settings::label_id(Label::Iris);
+    d.app().session.prefs.labels.colors.get_mut(&key).unwrap().name = "Interviews".into();
+    let c = d.v1(0);
+    d.exec("timeline.select", json!({"clips": [c.id.0]}));
+    d.ok("ui.click", json!({"id": format!("timeline.clip.{}", c.id.0), "button": "right"}));
+    d.frames(3);
+    d.click("timeline.clipMenu.edit.label");
+    let choice = d.ok("ui.elements", json!({"prefix": "timeline.clipMenu.edit.label.Iris"}));
+    assert_eq!(choice[0]["label"], json!("Interviews"), "{choice}");
+    d.click("timeline.clipMenu.edit.label.Iris");
+    assert_eq!(d.v1(0).label, Label::Iris);
+}
+
 #[test]
 fn quitting_with_unsaved_changes_asks_to_save() {
     let mut d = Driver::new();
