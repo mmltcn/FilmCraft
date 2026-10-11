@@ -611,7 +611,7 @@ fn label_presets(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft) {
                     d.preset_message = e;
                 }
             }
-            let user = selected.filter(|p| p.name != settings::DEFAULT_LABEL_PRESET);
+            let user = selected.filter(|p| !settings::is_builtin_label_preset(&p.name));
             if preset_button(app, ui, "delete", Icon::Trash, tl!("Delete this preset"), user.is_some())
                 && let Some(p) = user
             {

@@ -735,24 +735,26 @@ fn label_presets_import_export_and_delete() {
         let v = s.execute("labels.presets", json!({})).unwrap();
         v["presets"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect()
     };
-    assert_eq!(names(&mut s), ["Default"]);
+    assert_eq!(names(&mut s), ["Default", "Bright", "Roles"]);
     let src = dir.join("from someone.json");
     std::fs::write(&src, preset_json("Team", 16, "#102030")).unwrap();
     let r = s.execute("labels.importPreset", json!({"path": src.to_string_lossy()})).unwrap();
     assert_eq!(r["name"], "Team");
     assert!(dir.join("Label Presets").join("Team.json").is_file());
-    assert_eq!(names(&mut s), ["Default", "Team"]);
+    assert_eq!(names(&mut s), ["Default", "Bright", "Roles", "Team"]);
 
     // a bad file: an error, and the folder is as it was
     let bad = dir.join("bad.json");
     std::fs::write(&bad, preset_json("Bad", 3, "#102030")).unwrap();
     assert!(s.execute("labels.importPreset", json!({"path": bad.to_string_lossy()})).is_err());
     std::fs::write(dir.join("Label Presets").join("junk.json"), b"{not json").unwrap();
-    assert_eq!(names(&mut s), ["Default", "Team"], "unreadable files in the folder are skipped");
+    assert_eq!(names(&mut s), ["Default", "Bright", "Roles", "Team"], "unreadable files in the folder are skipped");
 
-    // a preset named like the built-in one keeps both
+    // a preset named like a built-in one keeps both
     std::fs::write(&src, preset_json("default", 16, "#405060")).unwrap();
     assert_eq!(s.execute("labels.importPreset", json!({"path": src.to_string_lossy()})).unwrap()["name"], "default (imported)");
+    std::fs::write(&src, preset_json("ROLES", 16, "#405060")).unwrap();
+    assert_eq!(s.execute("labels.importPreset", json!({"path": src.to_string_lossy()})).unwrap()["name"], "ROLES (imported)");
 
     // export writes the applied labels, named after the file, and imports back
     set(&mut s, "labels.colors.rose.color", json!("#123456"));
@@ -761,8 +763,57 @@ fn label_presets_import_export_and_delete() {
     let back = settings::LabelPreset::read(&out).unwrap();
     assert!(back.matches(&s.prefs.labels));
 
-    assert!(s.execute("labels.deletePreset", json!({"name": "Default"})).is_err(), "the built-in preset stays");
+    for builtin in ["Default", "Bright", "Roles"] {
+        assert!(s.execute("labels.deletePreset", json!({"name": builtin})).is_err(), "{builtin} stays");
+    }
     s.execute("labels.deletePreset", json!({"name": "Team"})).unwrap();
-    assert_eq!(names(&mut s), ["Default", "default (imported)"]);
+    assert_eq!(names(&mut s), ["Default", "Bright", "Roles", "default (imported)", "ROLES (imported)"]);
     assert!(s.execute("labels.deletePreset", json!({"name": "Team"})).is_err());
+}
+
+/// The built-in presets: Default (the labels as shipped), Bright and Roles, each with 16 distinct
+/// names and valid colours (Bright's and Roles' clearly different); Roles puts the label defaults
+/// on matching roles.
+#[test]
+fn builtin_label_presets_are_complete_and_distinct() {
+    use settings::LabelPreset;
+    let all = LabelPreset::builtins();
+    assert_eq!(all.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Default", "Bright", "Roles"]);
+    for p in &all {
+        assert!(settings::is_builtin_label_preset(&p.name));
+        assert_eq!(&LabelPreset::parse(&serde_json::to_vec(p).unwrap()).unwrap(), p, "{} is a valid preset file", p.name);
+        let mut names: Vec<&str> = p.labels.iter().map(|l| l.name.as_str()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 16, "{}: names are unique", p.name);
+        let rgb: Vec<[u8; 3]> = p.labels.iter().map(|l| settings::parse_hex(&l.color).unwrap()).collect();
+        if p.name == "Default" {
+            continue; // the colours labels have always had
+        }
+        for (i, a) in rgb.iter().enumerate() {
+            for b in &rgb[i + 1..] {
+                let d: f32 = a.iter().zip(b).map(|(x, y)| (f32::from(*x) - f32::from(*y)).powi(2)).sum::<f32>().sqrt();
+                assert!(d > 30.0, "{}: {a:?} and {b:?} are too close", p.name);
+            }
+        }
+    }
+    let roles = &all[2];
+    let mut labels = settings::LabelPrefs::default();
+    roles.apply(&mut labels);
+    assert!(roles.matches(&labels));
+    let d = labels.defaults.clone();
+    let named = [
+        (d.video, "B-Roll"),
+        (d.movie, "Footage"),
+        (d.audio, "Dialogue"),
+        (d.still, "Graphics"),
+        (d.sequence, "Sequence"),
+        (d.dynamic_link, "Visual Effects"),
+        (d.bin, "Bin"),
+        (d.captions, "Bin"),
+    ];
+    for (label, role) in named {
+        assert_eq!(labels.name(label), role);
+    }
+    assert!(!settings::is_builtin_label_preset("Team"));
 }

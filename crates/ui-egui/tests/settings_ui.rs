@@ -473,6 +473,30 @@ fn label_color_presets() {
     assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"]["name"], "Rose");
     assert_eq!(label(&mut d, "settings.labels.preset"), "Default");
 
+    // the other built-ins come after Default, can be chosen and reverted to, and can't be deleted
+    d.click("settings.labels.preset");
+    let items = d.ok("ui.elements", json!({"prefix": "settings.labels.preset."}));
+    let order: Vec<String> =
+        items.as_array().unwrap().iter().filter_map(|e| e["id"].as_str()?.strip_prefix("settings.labels.preset.").map(str::to_string)).collect();
+    assert_eq!(order, ["Default", "Bright", "Roles"]);
+    d.click("settings.labels.preset.Roles");
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Roles");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["violet"], json!({"name": "B-Roll", "color": "#5b8fd4"}));
+    d.click("settings.labels.preset");
+    d.click("settings.labels.preset.Bright");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"], json!({"name": "Mint", "color": "#2fd69a"}));
+    d.ok("ui.set", json!({"settings": {"values": {"labels.colors.rose.color": "#000000"}}}));
+    d.frames(2);
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Bright (Modified)");
+    d.click("settings.labelPresets.revert");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"]["color"], "#2fd69a");
+    d.click("settings.labelPresets.delete");
+    assert_eq!(label(&mut d, "settings.labels.preset"), "Bright", "built-ins can't be deleted");
+    assert_eq!(d.draft()["preset_message"], "");
+    d.click("settings.labels.preset");
+    d.click("settings.labels.preset.Default");
+    assert_eq!(d.draft()["values"]["labels"]["colors"]["rose"], json!({"name": "Rose", "color": d.pref("labels.colors.rose.color")}));
+
     // a bad file: an error in the dialog, nothing changes
     let bad = dir.join("bad.json");
     std::fs::write(&bad, preset("Bad", "#zzzzzz")).unwrap();

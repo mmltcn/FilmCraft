@@ -423,10 +423,72 @@ pub struct PresetLabel {
     pub color: String,
 }
 
+/// The built-in presets after [`DEFAULT_LABEL_PRESET`]: (name, 16 × (label name, colour)) in
+/// [`Label::ALL`] order. "Roles" puts the label defaults (Video, Movie, Audio, Still, Sequence,
+/// Dynamic Link, Bin / Captions on labels 0, 1, 2, 3, 5, 6, 7) on matching roles.
+const BUILTIN_LABEL_PRESETS: [(&str, [(&str, &str); 16]); 2] = [
+    (
+        "Bright",
+        [
+            ("Red", "#e3342f"),
+            ("Orange", "#ec7a24"),
+            ("Amber", "#f0a82a"),
+            ("Yellow", "#e8d422"),
+            ("Lime", "#9ed62a"),
+            ("Green", "#36c24a"),
+            ("Mint", "#2fd69a"),
+            ("Cyan", "#24c9dc"),
+            ("Sky", "#2fa0ec"),
+            ("Blue", "#3d6ff0"),
+            ("Indigo", "#5b5cf0"),
+            ("Violet", "#8452ec"),
+            ("Purple", "#ac46e0"),
+            ("Magenta", "#dc3ccc"),
+            ("Pink", "#ec4f8e"),
+            ("Gray", "#8c8c8c"),
+        ],
+    ),
+    (
+        "Roles",
+        [
+            ("B-Roll", "#5b8fd4"),
+            ("Footage", "#36a9c9"),
+            ("Dialogue", "#4cb87a"),
+            ("Graphics", "#e8913a"),
+            ("Interview", "#d9c040"),
+            ("Sequence", "#7f9e3c"),
+            ("Visual Effects", "#c95bc4"),
+            ("Bin", "#8a94a6"),
+            ("Titles", "#e86f5c"),
+            ("Music", "#8c6fe0"),
+            ("Sound Effects", "#e0609a"),
+            ("Voice-Over", "#5fd1b5"),
+            ("Captions", "#c8b48a"),
+            ("Ambience", "#a8754f"),
+            ("Color Grade", "#d64545"),
+            ("Stock", "#b5d454"),
+        ],
+    ),
+];
+
+/// Whether `name` is a built-in preset's (any case): built-ins can't be deleted or replaced.
+pub fn is_builtin_label_preset(name: &str) -> bool {
+    name.eq_ignore_ascii_case(DEFAULT_LABEL_PRESET) || BUILTIN_LABEL_PRESETS.iter().any(|(n, _)| name.eq_ignore_ascii_case(n))
+}
+
 impl LabelPreset {
     /// The built-in preset ([`DEFAULT_LABEL_PRESET`]).
     pub fn builtin() -> Self {
         Self::from_prefs(DEFAULT_LABEL_PRESET, &LabelPrefs::default())
+    }
+
+    /// Every built-in preset, [`DEFAULT_LABEL_PRESET`] first.
+    pub fn builtins() -> Vec<Self> {
+        let more = BUILTIN_LABEL_PRESETS.iter().map(|(name, labels)| Self {
+            name: (*name).into(),
+            labels: labels.iter().map(|(n, c)| PresetLabel { name: (*n).into(), color: (*c).into() }).collect(),
+        });
+        std::iter::once(Self::builtin()).chain(more).collect()
     }
 
     /// `labels`' names and colours as a preset called `name`.
@@ -502,7 +564,7 @@ impl Session {
         self.prefs_path.as_deref().and_then(Path::parent).map(|d| d.join(LABEL_PRESETS_DIR))
     }
 
-    /// The built-in preset, then the presets in the folder by name with the file each is in.
+    /// The built-in presets, then the presets in the folder by name with the file each is in.
     /// Files that fail [`LabelPreset::parse`] and names already taken are left out.
     pub fn label_presets(&self) -> Vec<(LabelPreset, Option<PathBuf>)> {
         let mut found: Vec<(LabelPreset, Option<PathBuf>)> = self
@@ -517,7 +579,7 @@ impl Session {
             .filter_map(|p| LabelPreset::read(&p).ok().map(|preset| (preset, Some(p))))
             .collect();
         found.sort_by_key(|(p, _)| p.name.to_lowercase());
-        let mut out = vec![(LabelPreset::builtin(), None)];
+        let mut out: Vec<(LabelPreset, Option<PathBuf>)> = LabelPreset::builtins().into_iter().map(|p| (p, None)).collect();
         for f in found {
             if !out.iter().any(|(p, _)| p.name.eq_ignore_ascii_case(&f.0.name)) {
                 out.push(f);
@@ -527,10 +589,10 @@ impl Session {
     }
 
     /// Copy the preset file at `path` into the presets folder, replacing a preset of the same
-    /// name, and return it. One named like the built-in preset becomes "<name> (imported)".
+    /// name, and return it. One named like a built-in preset becomes "<name> (imported)".
     pub fn import_label_preset(&self, path: &Path) -> std::result::Result<LabelPreset, String> {
         let mut p = LabelPreset::read(path)?;
-        if p.name.eq_ignore_ascii_case(DEFAULT_LABEL_PRESET) {
+        if is_builtin_label_preset(&p.name) {
             p.name = format!("{} (imported)", p.name);
         }
         let dir = self.label_presets_dir().ok_or("there is no presets folder in this session")?;
@@ -545,10 +607,10 @@ impl Session {
         Ok(p)
     }
 
-    /// Delete a preset from the presets folder (the built-in one can't be deleted).
+    /// Delete a preset from the presets folder (built-in presets can't be deleted).
     pub fn delete_label_preset(&self, name: &str) -> std::result::Result<(), String> {
         let (_, file) = self.label_presets().into_iter().find(|(p, _)| p.name == name).ok_or_else(|| format!("there is no label color preset “{name}”"))?;
-        let file = file.ok_or("the built-in preset can't be deleted")?;
+        let file = file.ok_or("built-in presets can't be deleted")?;
         std::fs::remove_file(&file).map_err(|e| format!("{}: {e}", file.display()))
     }
 }
