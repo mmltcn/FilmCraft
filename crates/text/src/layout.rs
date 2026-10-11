@@ -682,7 +682,8 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
                 lay.underline_runs.push(*si);
             }
         } else if style.underline && pl.content > 0.0 {
-            lay.underlines.push([x, baseline + pm.underline_pos, x + pl.content, baseline + pm.underline_pos + pm.underline_thickness]);
+            let y = baseline - style.baseline_shift + pm.underline_pos;
+            lay.underlines.push([x, y, x + pl.content, y + pm.underline_thickness]);
             lay.underline_runs.push(0);
         }
         lay.lines.push(Line {
