@@ -381,12 +381,14 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         }
         "playback.inToOut" => {
             let seq = app.session.active_sequence();
+            let marked_out = seq.and_then(|q| q.mark_out);
             let out = seq.and_then(|q| q.mark_out.map(|o| o + q.settings.frame_rate.frame_duration()));
             if let Some(i) = seq.and_then(|q| q.mark_in) {
                 app.session.set_playhead(i);
             }
             app.play(1.0);
             app.playback.stop_at = out;
+            app.playback.rest_at = marked_out;
             return Ok(Value::Null);
         }
         "playback.loop" => {

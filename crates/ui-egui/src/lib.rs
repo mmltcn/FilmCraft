@@ -224,6 +224,9 @@ pub struct Playback {
     pub hidden: bool,
     /// Forward playback stops here (Play In to Out, Play from Playhead to Out Point).
     pub stop_at: Option<Tick>,
+    /// Resting playhead for an inclusive marked range; unlike stop_at, this
+    /// names the last visible frame, not the following playback boundary.
+    pub rest_at: Option<Tick>,
 }
 
 /// How long (s) the audio clock may stand still during playback before the wall clock takes over.
@@ -959,6 +962,7 @@ impl FilmcraftApp {
     pub fn stop(&mut self) {
         self.playback.playing = false;
         self.playback.stop_at = None;
+        self.playback.rest_at = None;
         self.playback.preroll = None;
         self.playback.meter.finish();
         self.frames.stop_prefetch();
@@ -1079,7 +1083,7 @@ impl FilmcraftApp {
             (Tick::ZERO, dur)
         };
         if let Some(end) = self.playback.stop_at.filter(|e| t >= *e && self.playback.speed > 0.0 && !self.playback.looping) {
-            self.session.set_playhead(end);
+            self.session.set_playhead(self.playback.rest_at.unwrap_or(end));
             self.stop();
         } else if t >= hi && self.playback.speed > 0.0 {
             if self.playback.looping {
