@@ -101,9 +101,15 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     match e.effect.as_str() {
         "lumetri" => lumetri(img, e, cx),
         "median" => {
-            let r = (f(e, "radius", cx) * cx.px_scale).round().clamp(0.0, 4.0) as isize;
-            if r > 0 {
-                median(img, r);
+            // Radius is authored in source pixels; `px_scale` converts to the working image.
+            // Do not cap at 4 working pixels: that made Radius > 4 look identical at full res.
+            let r = f(e, "radius", cx) * cx.px_scale;
+            if r.is_finite() && r > 0.0 {
+                let cap = img.w.max(img.h).max(1) as f32;
+                let r = r.round().clamp(0.0, cap) as isize;
+                if r > 0 {
+                    median(img, r);
+                }
             }
         }
         "noise" => {
