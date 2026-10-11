@@ -178,6 +178,13 @@ pub fn dragged_project_item(ui: &egui::Ui) -> Option<ItemId> {
         _ => None,
     }
 }
+/// The items a drag from the Project panel carries: the whole selection when the dragged item is
+/// one of several selected, otherwise just the dragged item.
+pub fn dragged_selection(app: &FilmcraftApp, item: ItemId) -> Vec<ItemId> {
+    let sel = &app.session.state.project_selection;
+    // the selection can hold bins beside items (one id space): only items can be placed
+    if sel.len() > 1 && sel.contains(&item) { sel.iter().copied().filter(|i| app.session.project.item(*i).is_some()).collect() } else { vec![item] }
+}
 pub fn dragged_effect(ui: &egui::Ui) -> Option<String> {
     match payload(ui) {
         Some(DragPayload::Effect(e)) => Some(e),
@@ -194,7 +201,10 @@ pub fn drag_ghost(app: &FilmcraftApp, ui: &egui::Ui) {
     let ctx = ui.ctx();
     if let Some(p) = ctx.pointer_hover_pos() {
         let label = match &pl {
-            DragPayload::Item(i) => app.session.project.item(*i).map(|x| x.name.clone()).unwrap_or_default(),
+            DragPayload::Item(i) => match dragged_selection(app, *i).len() {
+                1 => app.session.project.item(*i).map(|x| x.name.clone()).unwrap_or_default(),
+                n => format!("{n} items"),
+            },
             DragPayload::Bin(b) => app.session.project.root.find_bin(filmcraft_project::BinId(*b)).map(|x| x.name.clone()).unwrap_or_default(),
             DragPayload::Source(s) => {
                 let name = app.session.project.item(s.item).map(|i| i.name.as_str()).unwrap_or("Source");
