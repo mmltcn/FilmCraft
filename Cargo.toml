@@ -30,6 +30,7 @@ filmcraft-vp9 = { path = "crates/vp9" }
 filmcraft-prores = { path = "crates/prores" }
 filmcraft-dnx = { path = "crates/dnx" }
 filmcraft-apv = { path = "crates/apv" }
+filmcraft-dng = { path = "crates/dng" }
 filmcraft-av1 = { path = "crates/av1" }
 filmcraft-aac = { path = "crates/aac" }
 filmcraft-opus = { path = "crates/opus" }
@@ -107,6 +108,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.filmcraft-apv]
+opt-level = 3
+
+[profile.dev.package.filmcraft-dng]
 opt-level = 3
 
 [profile.dev.package.filmcraft-av1]

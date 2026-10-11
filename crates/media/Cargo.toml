@@ -13,7 +13,11 @@ workspace = true
 filmcraft-time = { workspace = true }
 filmcraft-color = { workspace = true }
 filmcraft-frame = { workspace = true }
+filmcraft-dng = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "tiff", "bmp"] }
+
+[dev-dependencies]
+filmcraft-dng = { workspace = true, features = ["writer"] }

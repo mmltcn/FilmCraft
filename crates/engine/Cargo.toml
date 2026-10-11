@@ -46,4 +46,5 @@ web-time = "1"
 
 [dev-dependencies]
 filmcraft-testkit = { workspace = true }
+filmcraft-dng = { workspace = true, features = ["writer"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

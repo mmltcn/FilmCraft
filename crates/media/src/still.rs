@@ -1,4 +1,5 @@
-//! Still images (PNG, JPEG, GIF (first frame), WebP, TIFF, BMP, Targa, DPX) as media sources.
+//! Still images (PNG, JPEG, GIF (first frame), WebP, TIFF, BMP, Targa, DPX, DNG camera raw) as media
+//! sources.
 
 use std::sync::Arc;
 
@@ -6,6 +7,8 @@ use filmcraft_frame::VideoFrame;
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 use crate::{FrameRequest, MediaError, MediaInfo, MediaKind, MediaSource, Result, VideoStreamInfo};
+
+pub mod dng;
 
 /// Default still duration (Premiere's preference default is 5 seconds).
 pub const DEFAULT_STILL_DURATION: Tick = Tick(5 * TICKS_PER_SECOND);
@@ -55,6 +58,10 @@ pub struct StillSource {
 
 impl StillSource {
     pub fn decode(name: &str, bytes: &[u8]) -> Result<Self> {
+        // a DNG is a TIFF too: develop its raw image instead of reading its preview
+        if dng::sniff(bytes) {
+            return dng::still(name, bytes);
+        }
         let r = decode_raster(name, bytes)?;
         Ok(Self::from_rgba(name, r.width, r.height, r.rgba, r.has_alpha, bytes.len() as u64))
     }
