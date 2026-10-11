@@ -3,7 +3,7 @@
 //! - [`Numbered`] splits a file name around its last run of digits; [`sequence_frames`] lists the
 //!   frames from the chosen file's number up to the highest number present (gaps are `None`).
 //! - [`ImageSequenceSource`] decodes frames on demand through a [`FrameLoader`] (the host's file
-//!   access) with the still decoders (PNG, JPEG, TIFF, BMP, WebP, GIF), keeps recently used frames
+//!   access) with the still decoders (PNG, JPEG, TIFF, BMP, WebP, GIF, Targa, DPX), keeps recently used frames
 //!   in a byte-budgeted [`FrameCache`], and shows the nearest earlier frame for a missing or
 //!   undecodable one (the nearest later frame before the first).
 //! - The frame rate is the caller's (Settings ▸ Media ▸ Indeterminate Media Timebase).
@@ -75,7 +75,15 @@ impl Numbered {
 
     /// The frame number of a sibling file name of this sequence (same prefix, suffix and padding).
     pub fn number_of(&self, file_name: &str) -> Option<u64> {
-        let mid = file_name.strip_prefix(self.prefix.as_str())?.strip_suffix(self.suffix.as_str())?;
+        let rest = file_name.strip_prefix(self.prefix.as_str())?;
+        let mid = {
+            let n = rest.as_bytes();
+            let s = self.suffix.as_bytes();
+            if n.len() < s.len() || !n[n.len() - s.len()..].eq_ignore_ascii_case(s) {
+                return None;
+            }
+            &rest[..n.len() - s.len()]
+        };
         if mid.is_empty() || !mid.bytes().all(|b| b.is_ascii_digit()) || mid.len() > 18 {
             return None;
         }
@@ -126,9 +134,8 @@ impl ImageSequenceSource {
         let bytes = loader(&first).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound { MediaError::Offline(format!("{first}: {e}")) } else { MediaError::Io(format!("{first}: {e}")) }
         })?;
-        let img = image::load_from_memory(&bytes).map_err(|e| MediaError::Decode(format!("{first}: {e}")))?;
-        let has_alpha = img.color().has_alpha();
-        let (w, h) = (img.width(), img.height());
+        let img = crate::still::decode_raster(&first, &bytes)?;
+        let (w, h, has_alpha) = (img.width, img.height, img.has_alpha);
         let ext = first.rsplit('.').next().unwrap_or("image").to_ascii_uppercase();
         let n = frames.len() as i64;
         let info = MediaInfo {
@@ -153,7 +160,7 @@ impl ImageSequenceSource {
             file_size: None,
         };
         let cache = FrameCache::new(256 << 20);
-        cache.insert(frames.iter().position(Option::is_some).unwrap_or(0), Arc::new(VideoFrame::rgba8(w, h, img.to_rgba8().into_raw())));
+        cache.insert(frames.iter().position(Option::is_some).unwrap_or(0), Arc::new(VideoFrame::rgba8(w, h, img.rgba)));
         Ok(Self { info, frames, loader, cache })
     }
 
@@ -175,10 +182,10 @@ impl ImageSequenceSource {
         if let Some(f) = self.cache.get(&i) {
             return Ok(f);
         }
-        let path = self.frames[i].as_deref().ok_or(MediaError::NoStream("video"))?;
+        let path = self.frames.get(i).and_then(|f| f.as_deref()).ok_or(MediaError::NoStream("video"))?;
         let bytes = (self.loader)(path).map_err(|e| MediaError::Io(format!("{path}: {e}")))?;
-        let img = image::load_from_memory(&bytes).map_err(|e| MediaError::Decode(format!("{path}: {e}")))?;
-        let f = Arc::new(VideoFrame::rgba8(img.width(), img.height(), img.to_rgba8().into_raw()));
+        let img = crate::still::decode_raster(path, &bytes)?;
+        let f = Arc::new(VideoFrame::rgba8(img.width, img.height, img.rgba));
         self.cache.insert(i, f.clone());
         Ok(f)
     }
@@ -231,6 +238,7 @@ mod tests {
         assert!(!u.padded());
         assert_eq!(u.file_name(10), "frame10.TIF");
         assert_eq!(u.number_of("frame10.TIF"), Some(10));
+        assert_eq!(u.number_of("frame10.tif"), Some(10), "Linux stills often mix .TIF and .tif");
         assert_eq!(Numbered::parse("clip.mov"), None, "not a still");
         assert_eq!(Numbered::parse("nodigits.png"), None);
         let w = Numbered::parse("C:\\renders\\out.0010.exr.png").unwrap();

@@ -15,7 +15,7 @@ focused monitor (Program by default). Code: `crates/ui-egui/src/panels/monitor_v
 | `view.display.multicam` | Display Mode ▸ Multi-Camera | the Program's multi-camera view (`multicam.toggleView`) |
 | `view.display.audioWaveform`, `view.display.videoAndWaveform` | Display Mode ▸ Audio Waveform / Video and Audio Waveform Split | Source Monitor: the clip's waveform (click to move the source playhead); audio-only clips always show it |
 | `view.display.comparison` | Display Mode ▸ Comparison View | Program: the reference frame (left) beside the current frame; the reference starts at the playhead and is stepped or reset with the buttons under it, or `view.compare.setReference {time\|seconds}` |
-| `view.magnification.<fit\|10\|25\|50\|75\|100\|150\|200\|400\|800\|1600>` | View ▸ Magnification and the zoom dropdown | 100% = one frame pixel per screen pixel; scroll or drag with the Hand tool to pan |
+| `view.magnification.<fit\|10\|25\|50\|75\|100\|150\|200\|400\|800\|1600>` | View ▸ Magnification and the zoom dropdown | 100% = one frame pixel per screen pixel. The mouse wheel (or a pinch) over a monitor zooms about the pointer, from Fit too, within 10%–1600%; drag with the middle mouse button, or with the Hand tool, to pan; Fit resets both. Each monitor keeps its own zoom and pan |
 | `view.showRulers`, `view.showGuides`, `view.lockGuides`, `view.clearGuides` | View | toggles take `{"enabled": bool}` |
 | `view.addGuide` | View ▸ Add Guide… | dialog, or `{"orientation": "vertical\|horizontal", "position": px}` |
 | `view.snapInProgramMonitor` | View ▸ Snap in Program Monitor | graphic moves snap to the frame edges / centre and the guides (6 pt) |
@@ -43,14 +43,17 @@ Play auditions the full source span by default. Play In to Out and Play to Out
 address the marked Source range when Source has focus. The Source wrench menu can loop the
 marked range; Program keeps its separate loop setting.
 
-Normal forward playback has sound. L starts normal forward Source playback, K stops, and the
-left/right frame-step keys address Source when it has focus. Reverse and shuttle-speed Source
-playback and source sequences are not yet supported and report an explanatory error. A failed
-audio device leaves the picture advancing with a status message; a decoding error stops Source.
+Normal forward playback has sound. With Source focused, L plays forward and J backward; pressing
+the same key again doubles the speed up to 8×, K stops, Shuttle Slow Right/Left play at ¼ speed,
+and the left/right frame-step keys step the Source playhead. As in Program, shuttle speeds other
+than normal forward play without sound, and backward playback stops on the first frame. Source
+sequences are not yet supported and report an explanatory error. A failed audio device leaves
+the picture advancing with a status message; a decoding error stops Source.
 
 Commands: `source.playback.play`, `source.playback.stop`, `source.playback.toggle` (no parameters),
-available through the UI command registry, CLI bridge and MCP. `playback.toggle` also accepts
-`monitor: "source"|"program"` to override focus. `ui.inspect.sourcePlayback` reports playing,
+available through the UI command registry, CLI bridge and MCP. `playback.toggle`,
+`playback.forward`, `playback.reverse`, `playback.slowForward` and `playback.slowReverse` also
+accept `monitor: "source"|"program"` to override focus. `ui.inspect.sourcePlayback` reports playing,
 audioClock and playhead. Test: `cargo test --release -p filmcraft-ui-egui --test source_playback_ui`.
 
 ## Drag a marked Source range to the timeline

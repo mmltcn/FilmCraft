@@ -163,3 +163,87 @@ fn cropped_pictures_match_ffmpeg() {
         }
     }
 }
+
+/// An open GOP (x265 `open-gop`, like iPhone HEVC): each CRA after the first is followed in the
+/// file by RASL pictures shown before it, predicted from the GOP before. Asked for first (a clip
+/// trimmed to start on one, the playhead parked on one), such a picture came out black: decoding
+/// started at the CRA after it, which leaves its RASL pictures out. Every frame, asked of a fresh
+/// source and in an order that visits each CRA before its leading pictures, is ffmpeg's, from MP4
+/// and from Matroska.
+#[test]
+fn open_gop_leading_pictures_decode_alone() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    let args = [
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x96:rate=30:duration=2,noise=alls=10:allf=t",
+        "-c:v",
+        "libx265",
+        "-x265-params",
+        "log-level=error:keyint=12:min-keyint=12:scenecut=0:open-gop=1:bframes=3",
+        "-tag:v",
+        "hvc1",
+        "-pix_fmt",
+        "yuv420p",
+    ];
+    let Some(mp4) = fixture(&ff, "open_gop_x265.mp4", &args) else {
+        eprintln!("SKIPPED: ffmpeg without libx265");
+        return;
+    };
+    let mkv = fixture(&ff, "open_gop_x265.mkv", &["-i", mp4.to_str().unwrap(), "-c", "copy"]).unwrap();
+    let raw = ffmpeg_frames(&ff, &mp4, "yuv420p");
+    let frame_bytes = 160 * 96 * 3 / 2;
+    let want: Vec<_> = raw.chunks(frame_bytes).map(|f| raw_planes(f, 160, 96, 80, 48, 1)).collect();
+    assert_eq!(want.len(), 60);
+    for path in [&mp4, &mkv] {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let open = || filmcraft_codecs::open_bytes(name, bytes(path)).unwrap();
+        let rate = open().info().frame_rate();
+        let frame = |src: &filmcraft_media::SharedSource, i: usize| {
+            let f = src.video_frame(filmcraft_media::FrameRequest::full(rate.tick_of(i as i64))).unwrap_or_else(|e| panic!("{name}: frame {i}: {e}"));
+            assert!(planes(&f) == want[i], "{name}: frame {i} differs from ffmpeg's");
+        };
+        for i in 0..want.len() {
+            frame(&open(), i);
+        }
+        let src = open();
+        for cra in [12, 24, 36, 48] {
+            for i in [cra, cra - 1, cra - 2, cra - 3] {
+                frame(&src, i);
+            }
+        }
+    }
+}
+
+/// #800: MP2 in MP4 (`mp4a` + object type 0x6B, which names no layer) and in MOV (QuickTime
+/// `.mp2`) decodes sample-exactly as ffmpeg does: same length, the encoder delay (481 samples)
+/// trimmed by the edit list, and the same samples from the first one on, also after a seek. It
+/// used to go to the layer III decoder (MP4: silence) or not decode at all (MOV).
+#[test]
+fn mp2_in_mp4_and_mov_matches_ffmpeg() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for (name, rate) in [("mp2_stereo_224k_48k.mp4", 48_000u32), ("mp2_stereo_224k_44k.mov", 44_100)] {
+        let input = format!("anoisesrc=d=1:c=pink:r={rate}:a=0.3");
+        let Some(f) = fixture(&ff, name, &["-f", "lavfi", "-i", &input, "-ac", "2", "-c:a", "mp2", "-b:a", "224k"]) else {
+            eprintln!("SKIPPED ({name}): this ffmpeg can't encode it");
+            continue;
+        };
+        let src = filmcraft_codecs::open_bytes(name, bytes(&f)).unwrap();
+        let a = src.info().audio().cloned().unwrap();
+        assert_eq!((a.sample_rate, a.channels, a.codec.as_str()), (rate, 2, "MPEG Audio"), "{name}");
+        let want = ffmpeg_audio_f32(&ff, &f, &[]);
+        let n = want.len() / 2;
+        assert!(n > rate as usize * 9 / 10, "{name}: ffmpeg decoded {n} samples");
+        let worst = |from: usize, len: usize| {
+            let got = src.audio(from as i64, len, rate).unwrap();
+            (0..len).map(|k| (0..2).map(|c| (got.channels[c][k] - want[2 * (from + k) + c]).abs()).fold(0f32, f32::max)).fold(0f32, f32::max)
+        };
+        let level = want.iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!(level > 0.1, "{name}: the source is silent ({level})");
+        // a seek into the middle first, then the whole track from the start
+        let (mid, all) = (worst(n / 2 + 77, 3000), worst(0, n));
+        println!("{name}: {n} samples, max error mid {mid:.2e}, whole {all:.2e}");
+        assert!(mid <= 1e-4 && all <= 1e-4, "{name}: differs from ffmpeg by {mid} (mid) / {all} (whole)");
+    }
+}

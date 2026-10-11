@@ -28,6 +28,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("app.language.portuguese", "Português (Brasil)", ["Edit", "Language"], None),
     uic!("app.language.ukrainian", "Українська", ["Edit", "Language"], None),
     uic!("app.language.chinese", "简体中文", ["Edit", "Language"], None),
+    uic!("app.language.german", "Deutsch", ["Edit", "Language"], None),
+    uic!("app.language.russian", "Русский", ["Edit", "Language"], None),
+    uic!("app.language.french", "Français", ["Edit", "Language"], None),
     uic!("source.playback.toggle", "Source Play/Stop", [], None),
     uic!("source.playback.play", "Play Source", [], None),
     uic!("source.playback.stop", "Stop Source", [], None),
@@ -180,6 +183,9 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             | "app.language.portuguese"
             | "app.language.ukrainian"
             | "app.language.chinese"
+            | "app.language.german"
+            | "app.language.russian"
+            | "app.language.french"
     ) {
         // Japanese needs the craft-fonts (built with CRAFT_FONTS_DIR) or a font installed on the system
         if id == "app.language.japanese" && !crate::i18n::install_japanese_font(ctx) {
@@ -195,6 +201,9 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             "app.language.portuguese" => crate::i18n::Language::PtBr,
             "app.language.ukrainian" => crate::i18n::Language::Uk,
             "app.language.chinese" => crate::i18n::Language::ZhCn,
+            "app.language.german" => crate::i18n::Language::De,
+            "app.language.russian" => crate::i18n::Language::Ru,
+            "app.language.french" => crate::i18n::Language::Fr,
             _ => crate::i18n::Language::En,
         };
         // The preference is updated in memory before it is written, so a failed write (read-only
@@ -287,7 +296,8 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
     }
     match id {
         "playback.slowForward" | "playback.slowReverse" if targets_source(app, &params) => {
-            return Err("Source playback currently supports normal forward speed".into());
+            app.shuttle_source(if id == "playback.slowForward" { 0.25 } else { -0.25 })?;
+            return Ok(json!({"playing": app.source_playback.clock.playing, "speed": app.source_playback.clock.speed}));
         }
         "playback.slowForward" | "playback.slowReverse" => {
             app.play(if id == "playback.slowForward" { 0.25 } else { -0.25 });
@@ -315,12 +325,12 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             app.toggle_play(1.0);
             return Ok(json!({"playing": app.playback.playing}));
         }
-        "playback.forward" if targets_source(app, &params) => {
-            app.play_source()?;
-            return Ok(json!({"playing": app.source_playback.clock.playing, "speed": 1.0}));
-        }
-        "playback.reverse" if targets_source(app, &params) => {
-            return Err("Source playback currently supports normal forward speed; use Play/Space or frame stepping".into());
+        // L / J: pressing again in the same direction doubles the speed, up to 8×
+        "playback.forward" | "playback.reverse" if targets_source(app, &params) => {
+            let (clock, dir) = (&app.source_playback.clock, if id == "playback.forward" { 1.0 } else { -1.0 });
+            let speed = if clock.playing && clock.speed * dir > 0.0 { (clock.speed * 2.0).clamp(-8.0, 8.0) } else { dir };
+            app.shuttle_source(speed)?;
+            return Ok(json!({"playing": app.source_playback.clock.playing, "speed": app.source_playback.clock.speed}));
         }
         "playhead.stepBack" | "playhead.stepForward" | "playhead.stepBack5" | "playhead.stepForward5" if targets_source(app, &params) => {
             app.stop_source();
@@ -404,7 +414,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         }
         id if crate::links::url_for(id).is_some() => {
             let url = crate::links::url_for(id).unwrap_or_default();
-            crate::links::open(ctx, url);
+            crate::links::open(app, ctx, url);
             app.ui.status = tlf!("Opened {url}", url);
             return Ok(json!({"url": url}));
         }
@@ -482,6 +492,15 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             crate::panels::color_dialogs::open_sequence(app);
             return Ok(json!({"dialog": "sequenceColor"}));
         }
+        // New Bin from menus, shortcuts and the Project panel asks for the name (inline rename);
+        // agents pass `name` to name the bin directly
+        "file.newBin" if params.get("name").is_none() => {
+            let r = crate::panels::project::new_bin(app, &params);
+            if let Err(e) = &r {
+                app.ui.status = e.clone();
+            }
+            return r;
+        }
         // From menus/shortcuts (no params) these ask first; agents pass params to act directly.
         "file.revert" if params.as_object().is_none_or(|m| m.is_empty()) && app.session.is_dirty() => {
             if app.session.path.is_none() {
@@ -489,6 +508,16 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             }
             app.dialog = Some(crate::Dialog::RevertConfirm);
             return Ok(json!({"dialog": "revert"}));
+        }
+        // Files or an image on the system clipboard paste into the Timeline, or import into the
+        // Project panel (#611). Copying clips puts their names there as text, so media on the
+        // clipboard was copied after them; without media, Paste pastes the copied clips.
+        "edit.paste" | "edit.pasteInsert"
+            if params.as_object().is_none_or(|m| m.is_empty()) && matches!(app.ui.focused, PanelKind::Timeline | PanelKind::Project) =>
+        {
+            if let Some(r) = paste_clipboard_media(app, id == "edit.pasteInsert") {
+                return r;
+            }
         }
         "file.recover" if params.as_object().is_none_or(|m| m.is_empty()) => {
             if app.session.recovery_candidates().is_empty() {
@@ -545,6 +574,32 @@ fn put_clip_names_on_system_clipboard(app: &FilmcraftApp, ctx: &egui::Context) {
     ctx.copy_text(if text.trim().is_empty() { format!("{} clips", names.len()) } else { text });
 }
 
+/// Paste the files or the image on the system clipboard: placed on the Timeline when it has focus,
+/// imported into the shown bin in the Project panel. None when the clipboard holds neither.
+fn paste_clipboard_media(app: &mut FilmcraftApp, insert: bool) -> Option<Result<Value, String>> {
+    let media = (app.hooks.clipboard_media.as_mut()?)()?;
+    let paths = match media {
+        crate::ClipboardMedia::Files(paths) => paths,
+        crate::ClipboardMedia::Image { width, height, rgba } => match encode_png(width, height, rgba)
+            .and_then(|png| filmcraft_engine::paste_media::save_pasted_image(&mut app.session, &png).map_err(|e| e.to_string()))
+        {
+            Ok(path) => vec![path],
+            Err(e) => return Some(Err(e)),
+        },
+    };
+    let params = json!({"paths": paths, "insert": insert, "place": app.ui.focused == PanelKind::Timeline, "bin": app.import_bin().0});
+    Some(app.session.execute("edit.pasteMedia", params).map_err(|e| e.to_string()))
+}
+
+/// A compressed PNG of a clipboard image; an error when its size and pixels disagree.
+fn encode_png(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>, String> {
+    let (w, h) = (u32::try_from(width).map_err(|e| e.to_string())?, u32::try_from(height).map_err(|e| e.to_string())?);
+    let img = image::RgbaImage::from_raw(w, h, rgba).ok_or("the image on the clipboard is malformed")?;
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(png)
+}
+
 /// A menu tree entry for display / `ui.menu.list`.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct MenuItem {
@@ -571,6 +626,9 @@ pub fn menu_items(app: &FilmcraftApp) -> Vec<MenuItem> {
             "app.language.portuguese" => it.checked = Some(app.ui.language == crate::i18n::Language::PtBr),
             "app.language.ukrainian" => it.checked = Some(app.ui.language == crate::i18n::Language::Uk),
             "app.language.chinese" => it.checked = Some(app.ui.language == crate::i18n::Language::ZhCn),
+            "app.language.german" => it.checked = Some(app.ui.language == crate::i18n::Language::De),
+            "app.language.russian" => it.checked = Some(app.ui.language == crate::i18n::Language::Ru),
+            "app.language.french" => it.checked = Some(app.ui.language == crate::i18n::Language::Fr),
             _ => {}
         }
         if it.id.starts_with("view.") {
@@ -579,6 +637,16 @@ pub fn menu_items(app: &FilmcraftApp) -> Vec<MenuItem> {
         }
     }
     crate::panels::workspaces::menu(app, &mut v);
+    v
+}
+
+/// The menu bar as it ships, without a running app: English labels, default preferences, the
+/// built-in workspaces, nothing checked. Deterministic, so `cargo xtask parity` can measure it
+/// (`examples/menu_tree.rs` prints it as JSON).
+pub fn default_menu_items() -> Vec<MenuItem> {
+    let session = filmcraft_engine::Session::default();
+    let mut v = menu_items_for(&session);
+    crate::panels::workspaces::default_menu(&mut v, &session);
     v
 }
 
@@ -683,8 +751,14 @@ pub fn bindings(app: &FilmcraftApp) -> Vec<KeyBinding> {
     let shifted: Vec<KeyBinding> =
         v.iter().filter(|b| b.0.shift).filter_map(|(m, k, id, p)| shifted_key(*k).map(|k2| (*m, k2, id.clone(), p.clone()))).collect();
     v.extend(shifted);
-    v.sort_by_key(|(m, ..)| std::cmp::Reverse(m.command as u8 + m.shift as u8 + m.alt as u8 + m.ctrl as u8));
+    v.sort_by_key(|(m, ..)| std::cmp::Reverse(specificity(*m)));
     v
+}
+
+/// How many modifiers a chord names: chords naming more are matched first, because egui ignores
+/// extra Shift and Alt when matching a key press.
+pub fn specificity(m: egui::Modifiers) -> u8 {
+    m.command as u8 + m.shift as u8 + m.alt as u8 + m.ctrl as u8
 }
 
 /// The key a US layout reports for `k` with Shift held, when it differs.
@@ -718,6 +792,8 @@ pub fn external_commands() -> Vec<filmcraft_engine::shortcuts::CommandInfo> {
 pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("interface-language"), app.ui.language));
     let items = menu_items(app);
+    // Draw Edit ▸ Label with the user's live palette, not the baked-in label colours.
+    let labels = app.session.prefs.labels.clone();
     let ctx = ui.ctx().clone();
     let mut clicked: Option<String> = None;
     egui::MenuBar::new().config(egui::containers::menu::MenuConfig::new().style(crate::theme::menu_style)).ui(ui, |ui| {
@@ -728,7 +804,7 @@ pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
                 if mine.is_empty() {
                     ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
                 }
-                menu_level(ui, &mine, 1, &mut clicked, &mut app.auto);
+                menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
             });
             app.auto.add(&format!("menu.{top}"), r.response.rect, top);
         }
@@ -740,7 +816,14 @@ pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
 
 /// One menu level: items whose path ends here, and a submenu (at its first item's position) for
 /// each deeper path segment, recursively (e.g. Clip ▸ Video Options ▸ Time Interpolation).
-fn menu_level(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, clicked: &mut Option<String>, auto: &mut crate::automation::Registry) {
+fn menu_level(
+    ui: &mut egui::Ui,
+    items: &[&MenuItem],
+    depth: usize,
+    clicked: &mut Option<String>,
+    auto: &mut crate::automation::Registry,
+    labels: &filmcraft_engine::settings::LabelPrefs,
+) {
     let mut subs: Vec<&str> = Vec::new();
     for it in items {
         if let Some(sub) = it.path.get(depth).map(String::as_str) {
@@ -752,24 +835,37 @@ fn menu_level(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, clicked: &mu
             let language = ui.ctx().data(|d| d.get_temp::<crate::i18n::Language>(egui::Id::new("interface-language"))).unwrap_or_default();
             ui.menu_button(language.tr(sub), |ui| {
                 ui.set_min_width(220.0);
-                menu_level(ui, &inner, depth + 1, clicked, auto);
+                menu_level(ui, &inner, depth + 1, clicked, auto, labels);
             });
-        } else if menu_entry(ui, it, auto) {
+        } else if menu_entry(ui, it, auto, labels) {
             *clicked = Some(it.id.clone());
             ui.close();
         }
     }
 }
 
-fn menu_entry(ui: &mut egui::Ui, it: &MenuItem, auto: &mut crate::automation::Registry) -> bool {
-    // checkable items leave room for a checkmark drawn at the left
-    let label = if it.checked.is_some() { format!("      {}", it.label) } else { it.label.clone() };
+/// Only Edit ▸ Label choices get a swatch. Other commands keep their usual menu layout.
+fn label_menu_swatch(id: &str, labels: &filmcraft_engine::settings::LabelPrefs) -> Option<egui::Color32> {
+    let label = id.strip_prefix("edit.label.").and_then(filmcraft_project::Label::from_name)?;
+    let [r, g, b] = labels.rgb(label);
+    Some(egui::Color32::from_rgb(r, g, b))
+}
+
+fn menu_entry(ui: &mut egui::Ui, it: &MenuItem, auto: &mut crate::automation::Registry, labels: &filmcraft_engine::settings::LabelPrefs) -> bool {
+    // Checkmarks and label swatches each occupy the same left gutter.
+    let swatch = label_menu_swatch(&it.id, labels);
+    let label = if it.checked.is_some() || swatch.is_some() { format!("      {}", it.label) } else { it.label.clone() };
     let mut b = egui::Button::new(label);
     if let Some(s) = &it.shortcut {
         b = b.shortcut_text(shortcut_text(s));
     }
     let r = ui.add_enabled(it.enabled, b);
     auto.add(&format!("menu.{}", it.id), r.rect, &it.label);
+    if let Some(color) = swatch {
+        let rect = egui::Rect::from_center_size(r.rect.left_center() + egui::vec2(10.0, 0.0), egui::vec2(12.0, 12.0));
+        ui.painter().rect_filled(rect, 2.0, color);
+        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color), egui::StrokeKind::Inside);
+    }
     if it.checked == Some(true) {
         let c = r.rect.left_center() + egui::vec2(10.0, 0.0);
         let col = ui.visuals().text_color();
@@ -782,7 +878,22 @@ fn menu_entry(ui: &mut egui::Ui, it: &MenuItem, auto: &mut crate::automation::Re
 
 #[cfg(test)]
 mod parse_shortcut_tests {
-    use super::parse_shortcut;
+    use super::{label_menu_swatch, parse_shortcut};
+
+    #[test]
+    fn edit_label_menu_swatch_uses_current_custom_palette() {
+        use filmcraft_engine::settings::{LabelPrefs, label_id};
+        use filmcraft_project::Label;
+
+        let mut labels = LabelPrefs::default();
+        let label = Label::Iris;
+        let key = label_id(label);
+        labels.colors.get_mut(&key).unwrap().color = "#12ab34".into();
+
+        assert_eq!(label_menu_swatch("edit.label.Iris", &labels), Some(egui::Color32::from_rgb(0x12, 0xab, 0x34)));
+        assert_eq!(label_menu_swatch("edit.clear", &labels), None);
+        assert_eq!(label_menu_swatch("edit.label.invalid", &labels), None);
+    }
 
     /// Off macOS `Ctrl` and `Cmd` are the same key, so either spelling parses to the modifiers a
     /// physical Ctrl press carries and matches a binding written the other way (#245).
@@ -807,5 +918,27 @@ mod parse_shortcut_tests {
         let (m, k) = parse_shortcut("Cmd+Shift+K").unwrap();
         assert!(m.command && m.shift && !m.alt && k == egui::Key::K);
         assert_eq!(parse_shortcut("+").map(|(_, k)| k), Some(egui::Key::Plus));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What `cargo xtask parity` measures: every item sits under a top-level menu, and Window ▸
+    /// Workspaces lists the built-in workspaces before the layout commands, none checked.
+    #[test]
+    fn default_menu_items_are_the_shipped_menu_bar() {
+        let items = default_menu_items();
+        assert!(items.len() > 300, "{} items", items.len());
+        assert!(items.iter().all(|it| it.path.first().is_some_and(|top| MENUS.contains(&top.as_str()))));
+        let ws: Vec<&MenuItem> = items.iter().filter(|it| it.path == ["Window", "Workspaces"]).collect();
+        for name in crate::dock::WORKSPACES {
+            assert!(ws.iter().any(|it| it.label == name && it.checked.is_none()), "no workspace {name}");
+        }
+        let editing = ws.iter().position(|it| it.label == "Editing");
+        let reset = ws.iter().position(|it| it.id == "window.workspace.reset");
+        assert!(matches!((editing, reset), (Some(e), Some(r)) if e < r), "workspaces come before the layout commands");
+        assert!(items.iter().any(|it| it.id == "file.save" && it.path == ["File"]));
     }
 }

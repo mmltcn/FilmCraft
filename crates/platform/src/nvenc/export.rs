@@ -168,6 +168,9 @@ fn config(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -
     if !matches!(s.h264_pass, H264Pass::Single) || ((hevc || av1) && s.bitrate_mode == BitrateMode::Vbr2Pass) {
         return Err("two-pass VBR".into());
     }
+    if s.bitrate_mode == BitrateMode::Crf {
+        return Err("CRF (constant quality)".into());
+    }
     // the hardware path writes the aspect ratio of H.264 only
     if (hevc || av1) && s.pixel_aspect.is_some_and(|(n, d)| n != d) {
         return Err("non-square pixels".into());
@@ -394,6 +397,7 @@ mod tests {
             ("an unwritable colour signal", ExportSettings { signal: ColorSignal { primaries: 9, transfer: 1, matrix: 1 }, ..ok.clone() }),
             ("HDR with BT.709 primaries", ExportSettings { signal: ColorSignal { primaries: 1, transfer: 16, matrix: 9 }, ..ok.clone() }),
             ("two-pass", ExportSettings { bitrate_mode: BitrateMode::Vbr2Pass, ..ok.clone() }),
+            ("CRF", ExportSettings { bitrate_mode: BitrateMode::Crf, ..ok.clone() }),
             ("analysis pass", ExportSettings { h264_pass: H264Pass::First, ..ok.clone() }),
             ("interlaced", ExportSettings { field_order: FieldOrder::UpperFirst, ..ok.clone() }),
             ("non-square pixels", ExportSettings { pixel_aspect: Some((4, 3)), ..ok.clone() }),

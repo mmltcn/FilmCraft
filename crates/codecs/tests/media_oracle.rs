@@ -1,6 +1,7 @@
-//! Image sequences and Broadcast WAV against ffmpeg: ffmpeg writes numbered stills (PNG, JPEG,
-//! TIFF, BMP, WebP when available) and BWF files; the sequence frames must equal ffmpeg's decode of
-//! the same image2 sequence (lossless formats exactly, JPEG within a few levels), and the BWF
+//! Image sequences, stills and Broadcast WAV against ffmpeg: ffmpeg writes numbered stills (PNG,
+//! JPEG, TIFF, BMP, WebP when available, Targa, DPX), single Targa / DPX stills in every layout it
+//! has, and BWF files; our frames must equal ffmpeg's decode of the same files (lossless formats
+//! exactly, JPEG within a few levels, high bit depths within one 8-bit step), and the BWF
 //! TimeReference must give the start timecode.
 
 mod common;
@@ -112,6 +113,62 @@ fn jpeg_sequence_close() {
 fn webp_sequence_lossless() {
     let ff = filmcraft_testkit::require_ffmpeg!();
     check(&ff, "webp", &["-c:v", "libwebp", "-lossless", "1"], 0);
+}
+
+#[test]
+fn targa_and_dpx_sequences_exact() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    check(&ff, "tga", &[], 0);
+    check(&ff, "dpx", &["-pix_fmt", "gbrp10be"], 1);
+}
+
+/// One `ext` still in `pix_fmt` (95 × 63, so scan lines need padding; translucent when the format
+/// has alpha) opened like an imported file must match ffmpeg's RGBA decode within `tol` (exactly
+/// when `tol` is 0).
+fn still_matches(ff: &Path, ext: &str, pix_fmt: &str, extra: &[&str], tol: u8) {
+    let name = format!("still_{pix_fmt}{}.{ext}", extra.join(""));
+    let alpha = if pix_fmt.contains('a') && pix_fmt != "pal8" { ",format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='X*2+Y'" } else { "" };
+    let vf = format!("scale=95:63{alpha}");
+    let mut args = vec!["-f", "lavfi", "-i", "testsrc2=size=96x64", "-frames:v", "1", "-vf", &vf, "-pix_fmt", pix_fmt];
+    args.extend_from_slice(extra);
+    let Some(f) = fixture(ff, &name, &args) else {
+        eprintln!("SKIPPED: ffmpeg cannot write {name}");
+        return;
+    };
+    let src = filmcraft_codecs::open_bytes(&name, bytes(&f)).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(src.info().kind, MediaKind::Still, "{name}");
+    let v = src.info().video.as_ref().unwrap();
+    assert_eq!((v.width, v.height), (95, 63), "{name}");
+    let ours = rgba(&src.video_frame(FrameRequest::full(filmcraft_time::Tick(0))).unwrap());
+    // deeper than 8 bits: ffmpeg's 16-bit decode, rounded to 8 bits (its own 8-bit conversion dithers)
+    let want: Vec<u8> = if tol == 0 {
+        ffmpeg_out(ff, &["-i", f.to_str().unwrap(), "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+    } else {
+        let wide = ffmpeg_out(ff, &["-i", f.to_str().unwrap(), "-f", "rawvideo", "-pix_fmt", "rgba64le", "-"]);
+        wide.as_chunks::<2>().0.iter().map(|c| ((u32::from(u16::from_le_bytes(*c)) * 255 + 32767) / 65535) as u8).collect()
+    };
+    assert_eq!(ours.len(), want.len(), "{name}");
+    let d = ours.iter().zip(&want).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(d <= tol, "{name}: differs by {d}");
+    assert_eq!(v.has_alpha, want.as_chunks::<4>().0.iter().any(|p| p[3] != 255), "{name}");
+    eprintln!("{name}: max diff {d}");
+}
+
+#[test]
+fn targa_stills_every_layout() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for pix_fmt in ["bgr24", "bgra", "rgb555le", "gray", "pal8"] {
+        still_matches(&ff, "tga", pix_fmt, &[], 0); // run-length encoded (ffmpeg's default)
+        still_matches(&ff, "tga", pix_fmt, &["-rle", "0"], 0);
+    }
+}
+
+#[test]
+fn dpx_stills_every_layout() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for (pix_fmt, tol) in [("rgb24", 0), ("rgba", 0), ("gray", 0), ("rgb48be", 1), ("rgba64be", 1), ("gray16be", 1), ("gbrp10be", 1), ("gbrp12be", 1)] {
+        still_matches(&ff, "dpx", pix_fmt, &[], tol);
+    }
 }
 
 #[test]

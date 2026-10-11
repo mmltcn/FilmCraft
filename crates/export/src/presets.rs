@@ -136,6 +136,14 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
         p("Apple ProRes 422", bc, "QuickTime, ProRes 422, 24-bit 48 kHz PCM", mov(Format::ProRes, "standard")),
         p("Apple ProRes 422 LT", bc, "QuickTime, ProRes 422 LT, 24-bit 48 kHz PCM", mov(Format::ProRes, "lt")),
         p("Apple ProRes 422 Proxy", bc, "QuickTime, ProRes 422 Proxy, 24-bit 48 kHz PCM", mov(Format::ProRes, "proxy")),
+        p("Apple ProRes 4444", bc, "QuickTime, ProRes 4444 (4:4:4), 24-bit 48 kHz PCM", mov(Format::ProRes, "4444")),
+        p(
+            "Apple ProRes 4444 with Alpha",
+            bc,
+            "QuickTime, ProRes 4444 (4:4:4) with alpha channel, 24-bit 48 kHz PCM",
+            ExportSettings { alpha: true, ..mov(Format::ProRes, "4444") },
+        ),
+        p("Apple ProRes 4444 XQ", bc, "QuickTime, ProRes 4444 XQ (4:4:4), 24-bit 48 kHz PCM", mov(Format::ProRes, "4444xq")),
         p("Avid DNxHR HQ", bc, "QuickTime, DNxHR HQ (8-bit 4:2:2), 24-bit 48 kHz PCM", mov(Format::DnxHr, "hq")),
         p("Avid DNxHR SQ", bc, "QuickTime, DNxHR SQ (8-bit 4:2:2), 24-bit 48 kHz PCM", mov(Format::DnxHr, "sq")),
         p("Avid DNxHR LB", bc, "QuickTime, DNxHR LB (8-bit 4:2:2), 24-bit 48 kHz PCM", mov(Format::DnxHr, "lb")),
@@ -158,6 +166,20 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
         ),
         p("TIFF Sequence", "Image Sequence", "Numbered TIFF stills (RGB, 8-bit)", ExportSettings { format: Format::TiffSequence, ..Default::default() }),
         p("BMP Sequence", "Image Sequence", "Numbered BMP stills (24-bit)", ExportSettings { format: Format::BmpSequence, ..Default::default() }),
+        p("JPEG Sequence", "Image Sequence", "Numbered JPEG stills (quality 90)", ExportSettings { format: Format::JpegSequence, ..Default::default() }),
+        p(
+            "Targa Sequence",
+            "Image Sequence",
+            "Numbered Targa stills (24-bit, uncompressed)",
+            ExportSettings { format: Format::TgaSequence, ..Default::default() },
+        ),
+        p("DPX Sequence", "Image Sequence", "Numbered DPX stills (10-bit RGB)", ExportSettings { format: Format::DpxSequence, ..Default::default() }),
+        p(
+            "OpenEXR Sequence",
+            "Image Sequence",
+            "Numbered OpenEXR stills (half float, linear, uncompressed)",
+            ExportSettings { format: Format::ExrSequence, ..Default::default() },
+        ),
         p(
             "Animated GIF 640×360",
             "Animated GIF",
@@ -167,6 +189,16 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
         p("Waveform Audio 48 kHz 16-bit", "Audio Only", "WAV, stereo 48 kHz 16-bit PCM", audio_only(Format::Wav, 16)),
         p("Waveform Audio 48 kHz 24-bit", "Audio Only", "WAV, stereo 48 kHz 24-bit PCM", audio_only(Format::Wav, 24)),
         p("AIFF 48 kHz 16-bit", "Audio Only", "AIFF, stereo 48 kHz 16-bit PCM", audio_only(Format::Aiff, 16)),
+        p(
+            "AAC Audio 48 kHz 320 kbps",
+            "Audio Only",
+            "MPEG-4 audio (.m4a), stereo 48 kHz AAC-LC at 320 kbps",
+            ExportSettings {
+                format: Format::Aac,
+                audio: AudioSettings { codec: AudioCodec::Aac, sample_rate: Some(48_000), channels: 2, bitrate_kbps: 320, bits: 16 },
+                ..Default::default()
+            },
+        ),
     ]
 }
 

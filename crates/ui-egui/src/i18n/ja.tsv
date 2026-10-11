@@ -494,7 +494,9 @@
 	{panel} — coming in a later milestone	{panel} — 今後のマイルストーンで実装予定
 	Close Panel	パネルを閉じる
 	Close Other Timeline Panels	他のタイムラインパネルを閉じる
+	Close All	すべて閉じる
 	Maximize Frame	パネルを最大化
+	Restore Frame	パネルを元に戻す
 	Restore Workspace	ワークスペースを復元
 	Reveal Sequence in Project	プロジェクトでシーケンスを表示
 	Video Thumbnails	ビデオサムネイル
@@ -970,6 +972,7 @@
 	Reset…	リセット…
 	Source · {name}	ソース · {name}
 	Reset Effect	エフェクトをリセット
+	Reset Parameter	パラメーターをリセット
 	Save Preset…	プリセットを保存…
 	Custom Setup	カスタム設定
 	Edit…	編集…
@@ -1215,6 +1218,9 @@
 	Caption track options	キャプショントラックのオプション
 	Timeline Display Settings	タイムライン表示設定
 	Show Video Thumbnails	ビデオのサムネイルを表示
+	Head	先頭
+	Head and Tail	先頭と末尾
+	Continuous	連続
 	Show Audio Waveform	オーディオ波形を表示
 	Expand All Tracks	すべてのトラックを展開
 	Minimize All Tracks	すべてのトラックを最小化
@@ -2890,6 +2896,7 @@
 	Target Bitrate	ターゲットビットレート
 	Adaptive ({bpp} bits per pixel)	アダプティブ (1 ピクセルあたり {bpp} ビット)
 	Maximum Bitrate	最大ビットレート
+	Quality (CRF)	品質 (CRF)
 	Key Frame Distance	キーフレーム間隔
 	Quality	画質
 	Render at Maximum Depth	最大深度でレンダリングする
@@ -2956,6 +2963,9 @@
 	Step Forward 1 Frame	1 フレーム進む
 	Match Playhead	再生ヘッドに合わせる
 	Gang to Program	プログラムと連動
+	AAC Audio	AAC Audio
+	AAC Audio 48 kHz 320 kbps	AAC Audio 48 kHz 320 kbps
+	MPEG-4 audio (.m4a), stereo 48 kHz AAC-LC at 320 kbps	MPEG-4 オーディオ (.m4a)、ステレオ 48 kHz AAC-LC 320 kbps
 	AIFF	AIFF
 	AIFF 48 kHz 16-bit	AIFF 48 kHz 16-bit
 	AIFF, stereo 48 kHz 16-bit PCM	AIFF、ステレオ 48 kHz 16-bit PCM
@@ -2970,6 +2980,9 @@
 	Apple ProRes 422 HQ	Apple ProRes 422 HQ
 	Apple ProRes 422 LT	Apple ProRes 422 LT
 	Apple ProRes 422 Proxy	Apple ProRes 422 Proxy
+	Apple ProRes 4444	Apple ProRes 4444
+	Apple ProRes 4444 with Alpha	Apple ProRes 4444（アルファ付き）
+	Apple ProRes 4444 XQ	Apple ProRes 4444 XQ
 	Application	アプリケーション
 	Apply Guide Template	ガイドテンプレートを適用
 	Auto Save Now	今すぐ自動保存
@@ -3057,6 +3070,7 @@
 	Go to Sequence End	シーケンスの終了位置へ移動
 	Go to Sequence Start	シーケンスの開始位置へ移動
 	H.264	H.264
+	AV1	AV1
 	H.264 1920×1080 for video sharing sites, VBR 1 pass, 16 Mbps	動画共有サイト向けの H.264 1920×1080、VBR 1 パス、16 Mbps
 	H.264 1920×1080, VBR 1 pass, 20 Mbps target, AAC 320 kbps	H.264 1920×1080、VBR 1 パス、ターゲット 20 Mbps、AAC 320 kbps
 	H.264 1920×1080, VBR 2 pass, 18 Mbps	H.264 1920×1080、VBR 2 パス、18 Mbps
@@ -3151,6 +3165,18 @@
 	Nudge Volume -1dB	音量を -1dB 微調整
 	Nudge Volume -3dB	音量を -3dB 微調整
 	Numbered BMP stills (24-bit)	連番 BMP 静止画 (24-bit)
+	JPEG	JPEG
+	Targa	Targa
+	DPX	DPX
+	JPEG Sequence	JPEG 連番画像
+	Targa Sequence	Targa 連番画像
+	DPX Sequence	DPX 連番画像
+	Numbered JPEG stills (quality 90)	連番 JPEG 静止画 (品質 90)
+	Numbered Targa stills (24-bit, uncompressed)	連番 Targa 静止画 (24-bit、非圧縮)
+	Numbered DPX stills (10-bit RGB)	連番 DPX 静止画 (10-bit RGB)
+	OpenEXR	OpenEXR
+	OpenEXR Sequence	OpenEXR 連番画像
+	Numbered OpenEXR stills (half float, linear, uncompressed)	連番 OpenEXR 静止画 (16-bit 浮動小数点、リニア、非圧縮)
 	Numbered PNG stills at the sequence's frame size	シーケンスと同じフレームサイズの連番 PNG 静止画
 	Numbered TIFF stills (RGB, 8-bit)	連番 TIFF 静止画 (RGB、8-bit)
 	Opacity 0 → 100 % over the first second	最初の 1 秒で不透明度を 0 → 100 % に変化
@@ -3179,6 +3205,9 @@
 	QuickTime, ProRes 422 HQ, 24-bit 48 kHz PCM	QuickTime、ProRes 422 HQ、24-bit 48 kHz PCM
 	QuickTime, ProRes 422 LT, 24-bit 48 kHz PCM	QuickTime、ProRes 422 LT、24-bit 48 kHz PCM
 	QuickTime, ProRes 422 Proxy, 24-bit 48 kHz PCM	QuickTime、ProRes 422 Proxy、24-bit 48 kHz PCM
+	QuickTime, ProRes 4444 (4:4:4), 24-bit 48 kHz PCM	QuickTime、ProRes 4444 (4:4:4)、24-bit 48 kHz PCM
+	QuickTime, ProRes 4444 (4:4:4) with alpha channel, 24-bit 48 kHz PCM	QuickTime、ProRes 4444 (4:4:4) アルファチャンネル付き、24-bit 48 kHz PCM
+	QuickTime, ProRes 4444 XQ (4:4:4), 24-bit 48 kHz PCM	QuickTime、ProRes 4444 XQ (4:4:4)、24-bit 48 kHz PCM
 	QuickTime, ProRes 422, 24-bit 48 kHz PCM	QuickTime、ProRes 422、24-bit 48 kHz PCM
 	Quit FilmCraft	FilmCraft を終了
 	Rate Stretch Tool	レートストレッチツール
@@ -3294,6 +3323,7 @@
 	Upper First	上位フィールド優先
 	VBR, 1 pass	VBR、1 パス
 	VBR, 2 pass	VBR、2 パス
+	CRF (constant quality)	CRF (品質一定)
 	Vimeo 1080p Full HD	Vimeo 1080p Full HD
 	Vimeo 2160p 4K Ultra HD	Vimeo 2160p 4K Ultra HD
 	Voice-over Record	ナレーションを録音
@@ -3410,6 +3440,7 @@
 	Main (8-bit; Main 10 for HDR sequences)	メイン (8 ビット、HDR シーケンスではメイン 10)
 	Encoder	エンコーダー
 	Hardware (H.265 has no software encoder)	ハードウェア (H.265 にはソフトウェアエンコーダーがありません)
+	Hardware (AV1 has no software encoder)	ハードウェア (AV1 にはソフトウェアエンコーダーがありません)
 	Text Properties	テキストのプロパティ
 	Text Box Height	テキストボックスの高さ
 	Paragraph Text	段落テキスト
@@ -3446,6 +3477,8 @@
 	Light Theme	ライトテーマ
 	Next Appearance Mode	次の外観モード
 	Sync with system	システムと同期
+	UI Scale	UI のスケール
+	Auto (system)	自動 (システム)
 	Go to previous keyframe	前のキーフレームへ移動
 	Go to next keyframe	次のキーフレームへ移動
 	Add keyframe	キーフレームを追加
@@ -3505,3 +3538,9 @@
 	Edit Narration	ナレーションを編集
 	Clear Transition	トランジションを消去
 	Set Transition Duration	トランジションのデュレーションを設定
+	Refresh Changed Media	変更されたメディアを更新
+	Project Notes	プロジェクトメモ
+	Get Project Notes	プロジェクトメモを取得
+	Edit Project Notes	プロジェクトメモを編集
+	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	このプロジェクトのメモ: やること、指示、フレーム番号など… プロジェクトと一緒に保存されます。
+	GPU acceleration is unavailable; preview renders on the CPU	GPU アクセラレーションを利用できません。プレビューは CPU でレンダリングされます

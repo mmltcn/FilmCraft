@@ -1,7 +1,8 @@
 //! Monitor view options (the View menu and the monitors' wrench menus): Playback / Paused
 //! Resolution, High Quality Playback, Display Mode (Composite Video, Alpha, Red, Green, Blue,
 //! Multi-Camera, Audio Waveform, Comparison View, Video and Audio Waveform Split), Magnification
-//! (Fit, 10%…1600%, scroll or Hand-tool panning), rulers, guides (dragged out of the rulers, Add
+//! (Fit, 10%…1600%, the wheel zooming about the pointer, middle-button or Hand-tool panning),
+//! rulers, guides (dragged out of the rulers, Add
 //! Guide…, Clear Guides, Lock Guides, templates saved in the user preferences) and Snap in Program
 //! Monitor (graphic drags snap to guides, the frame edges and centre).
 //!
@@ -354,14 +355,42 @@ pub fn picture_rect(area: Rect, fw: f32, fh: f32, v: &MonitorView, ppp: f32) -> 
     }
 }
 
-/// Pan a magnified picture: scroll over it, or drag with the Hand tool.
-pub fn pan_input(app: &mut FilmcraftApp, ui: &mut egui::Ui, w: Which, area: Rect, pic: Rect) {
+/// Zoom and pan the picture `pic` shown in `area`: the wheel (or a pinch) zooms about the pointer,
+/// from Fit too, between the zoom menu's 10% and 1600%; a middle-button drag, or a drag with the
+/// Hand tool, pans a magnified picture. `fw` is the picture's width in frame pixels.
+pub fn zoom_pan_input(app: &mut FilmcraftApp, ui: &mut egui::Ui, w: Which, area: Rect, pic: Rect, fw: f32, ppp: f32) {
+    let ctx = ui.ctx().clone();
+    if ui.rect_contains_pointer(area)
+        && let Some(p) = ctx.pointer_hover_pos()
+    {
+        // as fast as the Timeline's own wheel zoom
+        let wheel = crate::panels::timeline::wheel_input(&ctx);
+        let f = if (wheel.pinch - 1.0).abs() > 1e-4 { wheel.pinch } else { (1.0 + wheel.delta.y * 0.01).clamp(0.5, 2.0) };
+        if (f - 1.0).abs() > 1e-4 && pic.width() > 0.0 && fw > 0.0 {
+            let cur = pic.width() * ppp / fw;
+            let z = (cur * f).clamp(ZOOMS[0].1, ZOOMS[ZOOMS.len() - 1].1);
+            let k = z / cur;
+            // the point of the picture under the pointer stays under it
+            let centre = p - (p - pic.center()) * k;
+            let max = ((pic.size() * k - area.size()) / 2.0).max(Vec2::ZERO);
+            let v = view_mut(app, w);
+            v.zoom = Some(z);
+            v.pan = [(centre.x - area.center().x).clamp(-max.x, max.x), (centre.y - area.center().y).clamp(-max.y, max.y)];
+            return;
+        }
+    }
     if view(app, w).zoom.is_none() {
         return;
     }
     let mut d = Vec2::ZERO;
-    if ui.rect_contains_pointer(area) {
-        d += ui.input(|i| i.smooth_scroll_delta);
+    // a middle-button drag that began over the picture pans it, whatever the tool
+    let held = egui::Id::new((prefix(w), "middle-pan"));
+    let (pressed, down, moved) = ui.input(|i| (i.pointer.button_pressed(egui::PointerButton::Middle), i.pointer.middle_down(), i.pointer.delta()));
+    let panning = down && (ui.data(|m| m.get_temp::<bool>(held)).unwrap_or(false) || (pressed && ui.rect_contains_pointer(area)));
+    ui.data_mut(|m| m.insert_temp(held, panning));
+    if panning {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        d += moved;
     }
     if app.ui.tool == Tool::Hand {
         let resp = ui.interact(area, egui::Id::new((prefix(w), "pan")), Sense::drag());
@@ -575,7 +604,7 @@ pub fn waveform(
     }
     let mid = area.center().y;
     p.line_segment([pos2(area.min.x, mid), pos2(area.max.x, mid)], Stroke::new(1.0, Color32::from_white_alpha(30)));
-    match crate::panels::timeline::request_peaks(app, item) {
+    match crate::panels::timeline::request_peaks(app, item, 0) {
         Some(peaks) if !peaks.is_empty() => {
             let half = area.height() * 0.45;
             let spp = 256.0 * TICKS_PER_SAMPLE_48K;

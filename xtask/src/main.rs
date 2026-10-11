@@ -11,10 +11,14 @@
 //! - `fixtures [crate…]`: pre-generate the ffmpeg fixture matrix of the oracle tests (runs each
 //!   crate's ignored `generate_fixtures` test, i.e. the same generators the tests use) and print
 //!   what was made, reused or skipped.
+//! - `parity [--reference FILE] [--out FILE] [--min PERCENT]`: measured menu parity of our shipped
+//!   menu bar against a reference list of menu paths (default: the local `plan/premiere/menus.json`),
+//!   presence and placement reported separately (`parity.rs`, docs/gaps.md G7).
 //! - `ico <out.ico> <in.png>…`: pack PNGs into a Windows `.ico` (used by `packaging/icons.sh`).
 //! - `ci`: fmt check, clippy -D warnings, tests, layers, assets, wasm.
 
 mod ico;
+mod parity;
 mod version;
 
 use std::process::{Command, ExitCode};
@@ -488,12 +492,16 @@ fn main() -> ExitCode {
             let rest: Vec<String> = std::env::args().skip(2).collect();
             version::run(&root(), &rest.iter().map(String::as_str).collect::<Vec<_>>())
         }
+        "parity" => {
+            let rest: Vec<String> = std::env::args().skip(2).collect();
+            parity::run(&root(), &rest.iter().map(String::as_str).collect::<Vec<_>>())
+        }
         "ico" => {
             let rest: Vec<String> = std::env::args().skip(2).collect();
             ico::run(&rest.iter().map(String::as_str).collect::<Vec<_>>())
         }
         _ => Err(
-            "usage: cargo xtask <layers|assets|wasm|web [--dev] [--serve PORT]|fixtures [crate…]|ico OUT IN…|version [set X.Y.Z]|ci|bench [args]|bench-playback [args]>"
+            "usage: cargo xtask <layers|assets|wasm|web [--dev] [--serve PORT]|fixtures [crate…]|parity [--reference FILE] [--out FILE] [--min PERCENT]|ico OUT IN…|version [set X.Y.Z]|ci|bench [args]|bench-playback [args]>"
                 .into(),
         ),
     };
@@ -503,5 +511,26 @@ fn main() -> ExitCode {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    fn macos_packaging(file: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/macos").join(file);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// Voice-over recording needs both halves on macOS: the usage string (else the permission
+    /// prompt never appears) and the hardened-runtime audio-input entitlement (else the input is
+    /// blocked). Regression test for #659.
+    #[test]
+    fn macos_bundle_may_use_the_microphone() {
+        let plist = macos_packaging("Info.plist.in");
+        assert!(plist.contains("<key>NSMicrophoneUsageDescription</key>"));
+        let entitlements = macos_packaging("entitlements.plist");
+        assert!(entitlements.contains("<key>com.apple.security.device.audio-input</key>\n  <true/>"));
     }
 }

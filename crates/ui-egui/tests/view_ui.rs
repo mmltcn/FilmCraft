@@ -183,6 +183,64 @@ fn view_menu_resolutions_and_display_modes() {
     assert_eq!((s["display"].as_str(), s["show_rulers"].as_bool()), (Some("Composite"), Some(true)));
 }
 
+fn num(v: &Value) -> f64 {
+    v.as_f64().unwrap_or_else(|| panic!("not a number: {v}"))
+}
+
+/// #807: the wheel over a monitor zooms about the pointer, a middle-button drag pans, Fit resets,
+/// and each monitor keeps its own view.
+#[test]
+fn wheel_zooms_about_the_pointer_and_the_middle_button_pans() {
+    let mut d = Driver::demo();
+    // at 100% the picture is larger than the monitor, so the element is the monitor's area
+    d.menu("view.magnification.100");
+    let area = d.rect("program.picture");
+    let centre = (area[0] + area[2] / 2.0, area[1] + area[3] / 2.0);
+    let at = (area[0] + area[2] * 0.25, area[1] + area[3] * 0.4);
+    // 50 points up: 1.5 times; the point under the pointer stays under it
+    d.ok("ui.scroll", json!({"x": at.0, "y": at.1, "dx": 0.0, "dy": 50.0}));
+    d.frames(2);
+    let p = d.program();
+    assert!((num(&p["zoom"]) - 1.5).abs() < 1e-4, "{p}");
+    let want = ((centre.0 - at.0) * 0.5, (centre.1 - at.1) * 0.5);
+    assert!((num(&p["pan"][0]) - want.0).abs() < 1.0 && (num(&p["pan"][1]) - want.1).abs() < 1.0, "pan {} for {want:?}", p["pan"]);
+
+    // the middle button drags the picture, whatever the tool
+    let (zoom, pan) = (num(&p["zoom"]), [num(&p["pan"][0]), num(&p["pan"][1])]);
+    let send = |d: &mut Driver, e: egui::Event| {
+        d.harness.input_mut().events.push(e);
+        d.frames(1);
+    };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Default::default() };
+    let from = egui::pos2(centre.0 as f32, centre.1 as f32);
+    send(&mut d, egui::Event::PointerMoved(from));
+    send(&mut d, button(from, true));
+    for k in 1..=4 {
+        send(&mut d, egui::Event::PointerMoved(from + egui::vec2(-10.0 * k as f32, 5.0 * k as f32)));
+    }
+    send(&mut d, button(from + egui::vec2(-40.0, 20.0), false));
+    let p = d.program();
+    assert_eq!(num(&p["zoom"]), zoom, "a pan does not zoom");
+    assert!((num(&p["pan"][0]) - (pan[0] - 40.0)).abs() < 1.0 && (num(&p["pan"][1]) - (pan[1] + 20.0)).abs() < 1.0, "pan {} after {pan:?}", p["pan"]);
+
+    // zooming out stops at the menu's smallest level; Fit resets zoom and pan
+    for _ in 0..12 {
+        d.ok("ui.scroll", json!({"x": centre.0, "y": centre.1, "dx": 0.0, "dy": -50.0}));
+    }
+    d.frames(2);
+    assert!((num(&d.program()["zoom"]) - 0.1).abs() < 1e-6, "stops at 10%");
+    d.menu("view.magnification.fit");
+    let p = d.program();
+    assert!(p["zoom"].is_null() && p["pan"] == json!([0.0, 0.0]), "{p}");
+
+    // from Fit, the wheel zooms in too; the Source monitor keeps its own view
+    d.ok("ui.scroll", json!({"x": centre.0, "y": centre.1, "dx": 0.0, "dy": 20.0}));
+    d.frames(2);
+    assert!(d.program()["zoom"].as_f64().is_some(), "zoomed in from Fit");
+    let source = d.ok("ui.inspect", json!({}))["ui"]["source"].clone();
+    assert!(source["zoom"].is_null() && source["pan"] == json!([0.0, 0.0]), "{source}");
+}
+
 #[test]
 fn magnification_pans_and_guides_from_rulers() {
     let mut d = Driver::demo();

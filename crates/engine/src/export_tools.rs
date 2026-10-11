@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use filmcraft_export::presets::{DEFAULT_PRESET, preset_key};
-use filmcraft_export::{ExportPreset, ExportSettings, Format, GpuRendering, HardwareEncoding};
+use filmcraft_export::{BitrateMode, ExportPreset, ExportSettings, Format, GpuRendering, HardwareEncoding};
 use filmcraft_project::{ItemId, Project};
 use filmcraft_time::{FrameRate, Tick, TimeRange};
 use serde::{Deserialize, Serialize};
@@ -213,7 +213,13 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
         settings.max_bitrate_kbps = Some(v);
     }
     if let Some(v) = str_p(p, "bitrateMode") {
-        settings.bitrate_mode = serde_json::from_value(json!(v)).map_err(|_| bad(cmd, "bitrateMode: cbr | vbr1Pass | vbr2Pass"))?;
+        settings.bitrate_mode = serde_json::from_value(json!(v)).map_err(|_| bad(cmd, "bitrateMode: cbr | vbr1Pass | vbr2Pass | crf"))?;
+    }
+    if let Some(v) = f64_p(p, "crf") {
+        settings.crf = v as f32;
+        if p.get("bitrateMode").is_none() {
+            settings.bitrate_mode = BitrateMode::Crf;
+        }
     }
     if let Some(v) = crate::commands::checked_u32_p(p, "keyframeDistance", cmd)? {
         settings.keyframe_distance = Some(v);
@@ -354,7 +360,14 @@ fn file_safe(n: &str) -> String {
 fn with_extension(path: &str, settings: &ExportSettings) -> String {
     let ext = settings.extension();
     match Path::new(path).extension().and_then(|e| e.to_str()) {
-        Some(e) if e.eq_ignore_ascii_case(ext) || (settings.format == Format::TiffSequence && e.eq_ignore_ascii_case("tiff")) => path.to_string(),
+        Some(e)
+            if e.eq_ignore_ascii_case(ext)
+                || (settings.format == Format::TiffSequence && e.eq_ignore_ascii_case("tiff"))
+                || (settings.format == Format::JpegSequence && e.eq_ignore_ascii_case("jpeg"))
+                || (settings.format == Format::Aac && e.eq_ignore_ascii_case("aac")) =>
+        {
+            path.to_string()
+        }
         Some(_) if settings.is_image_sequence() || matches!(settings.format, Format::Aiff) => format!("{}.{ext}", path.rsplit_once('.').map_or(path, |x| x.0)),
         _ => format!("{path}.{ext}"),
     }

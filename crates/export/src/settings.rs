@@ -102,6 +102,9 @@ pub enum BitrateMode {
     Vbr1Pass,
     /// Variable bitrate, two passes (the picture is rendered and analysed first).
     Vbr2Pass,
+    /// Constant quality: every frame is coded at [`ExportSettings::crf`] and the bitrate follows the
+    /// picture (H.264, built-in encoder only).
+    Crf,
 }
 
 impl BitrateMode {
@@ -110,6 +113,7 @@ impl BitrateMode {
             BitrateMode::Cbr => "CBR",
             BitrateMode::Vbr1Pass => "VBR, 1 pass",
             BitrateMode::Vbr2Pass => "VBR, 2 pass",
+            BitrateMode::Crf => "CRF (constant quality)",
         }
     }
 }
@@ -156,7 +160,7 @@ impl MxfVideoCodec {
     }
 }
 
-/// Audio codec. `Auto` = AAC in MP4, PCM in QuickTime / WAV / AIFF.
+/// Audio codec. `Auto` = AAC in MP4 and AAC Audio, PCM in QuickTime / WAV / AIFF.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioCodec {
@@ -374,9 +378,24 @@ impl ExportSettings {
         if self.format.is_mxf() { self.mxf_video_codec.encoder_format() } else { self.format }
     }
 
+    /// Whether the output can carry an alpha channel ([`ExportSettings::alpha`]): PNG, TIFF,
+    /// Targa and OpenEXR sequences and ProRes 4444 / 4444 XQ QuickTime movies.
+    pub fn supports_alpha(&self) -> bool {
+        match self.format {
+            Format::PngSequence | Format::TiffSequence | Format::TgaSequence | Format::ExrSequence => true,
+            Format::ProRes => crate::prores_profile(&self.prores_profile).chroma() == filmcraft_prores::ChromaFormat::Yuv444,
+            _ => false,
+        }
+    }
+
+    /// Whether the exported frames keep their alpha channel instead of being flattened over black.
+    pub fn keeps_alpha(&self) -> bool {
+        self.alpha && self.supports_alpha()
+    }
+
     /// Whether the output is a numbered image sequence.
     pub fn is_image_sequence(&self) -> bool {
-        matches!(self.format, Format::PngSequence | Format::TiffSequence | Format::BmpSequence)
+        self.format.is_image_sequence()
     }
 
     /// Output size, rate, audio format and bitrate for a sequence of `seq_w`×`seq_h` at `seq_rate`.
@@ -406,24 +425,16 @@ impl ExportSettings {
             6.. => 6,
             _ => 2,
         };
-        Resolved {
-            width: w,
-            height: h,
-            rate,
-            sample_rate: self.audio.sample_rate.filter(|r| (8000..=192_000).contains(r)).unwrap_or(seq_sr),
-            channels,
-            target_kbps: target,
-            max_kbps: max,
-            keyint,
-        }
+        Resolved { width: w, height: h, rate, sample_rate: self.audio.sample_rate.unwrap_or(seq_sr), channels, target_kbps: target, max_kbps: max, keyint }
     }
 
     /// The audio codec actually used.
     pub fn audio_codec(&self) -> AudioCodec {
         match (self.format, self.audio.codec) {
             (Format::Wav | Format::Aiff | Format::MxfOp1a | Format::MxfOpAtom, _) => AudioCodec::Pcm,
-            (f, _) if f.is_h26x() && self.multiplexer == Multiplexer::Mp4 => AudioCodec::Aac,
-            (_, AudioCodec::Auto) if self.format.is_h26x() => AudioCodec::Aac,
+            (Format::Aac, _) => AudioCodec::Aac,
+            (f, _) if f.is_mp4_with(self.multiplexer) => AudioCodec::Aac,
+            (_, AudioCodec::Auto) if self.format.is_mp4_video() => AudioCodec::Aac,
             (_, AudioCodec::Auto) => AudioCodec::Pcm,
             (_, c) => c,
         }
@@ -436,7 +447,7 @@ impl ExportSettings {
 
     /// Whether the format carries video.
     pub fn has_video(&self) -> bool {
-        !matches!(self.format, Format::Wav | Format::Aiff)
+        !self.format.is_audio_only()
     }
 
     /// File extension of the output.
@@ -451,6 +462,7 @@ impl ExportSettings {
         let fps = r.rate.num as f64 / r.rate.den as f64;
         let px = r.width as f64 * r.height as f64;
         let video_bps = match self.video_format() {
+            Format::Aac => 0.0,
             Format::H264 | Format::Hevc | Format::Av1 => r.target_kbps as f64 * 1000.0,
             Format::ProRes => crate::prores_profile(&self.prores_profile).nominal_mbps_1080p30() * 1e6 * px / (1920.0 * 1080.0) * fps / 29.97,
             Format::DnxHr => {
@@ -472,13 +484,18 @@ impl ExportSettings {
                 };
                 px * fps * bpp
             }
-            Format::Mjpeg => px * 8.0 * (0.4 + self.quality as f64 / 100.0 * 2.0) * fps / 8.0,
+            Format::Mjpeg | Format::JpegSequence => px * 8.0 * (0.4 + self.quality as f64 / 100.0 * 2.0) * fps / 8.0,
             Format::PngSequence => px * 4.0 * 0.45 * 8.0 * fps,
             Format::TiffSequence | Format::BmpSequence => px * if self.format == Format::BmpSequence { 3.0 } else { 4.0 } * 8.0 * fps,
+            Format::TgaSequence => px * if self.keeps_alpha() { 4.0 } else { 3.0 } * 8.0 * fps,
+            // 10-bit RGB in one 32-bit word per pixel
+            Format::DpxSequence => px * 4.0 * 8.0 * fps,
+            // two bytes per half-float channel
+            Format::ExrSequence => px * if self.keeps_alpha() { 8.0 } else { 6.0 } * 8.0 * fps,
             Format::Gif => px * 0.6 * 8.0 * fps,
             Format::Wav | Format::Aiff | Format::MxfOp1a | Format::MxfOpAtom => 0.0,
         };
-        let audio_bps = if self.has_audio() || matches!(self.format, Format::Wav | Format::Aiff) {
+        let audio_bps = if self.has_audio() || self.format.is_audio_only() {
             match self.audio_codec() {
                 AudioCodec::Aac => self.audio.bitrate_kbps as f64 * 1000.0,
                 _ => r.sample_rate as f64 * r.channels as f64 * if self.audio.bits >= 24 { 24.0 } else { 16.0 },
@@ -520,6 +537,7 @@ impl ExportSettings {
                     );
                     v += &match self.bitrate_mode {
                         BitrateMode::Cbr => format!(", {}", mbps(r.target_kbps)),
+                        BitrateMode::Crf => format!(" {}", self.crf),
                         _ => format!(", Target {}, Max {}", mbps(r.target_kbps), mbps(r.max_kbps)),
                     };
                     v += &format!(", keyframe every {} frames", r.keyint);
@@ -549,17 +567,21 @@ impl ExportSettings {
                         Profile::Proxy => ", ProRes 422 Proxy",
                         Profile::Lt => ", ProRes 422 LT",
                         Profile::Standard => ", ProRes 422",
-                        _ => ", ProRes 422 HQ",
+                        Profile::Hq => ", ProRes 422 HQ",
+                        Profile::P4444 => ", ProRes 4444",
+                        Profile::P4444Xq => ", ProRes 4444 XQ",
                     }
                 }
                 Format::DnxHr => v += &format!(", DNxHR {}", if self.dnx_profile.is_empty() { "HQ".into() } else { self.dnx_profile.to_ascii_uppercase() }),
                 Format::Apv => v += &format!(", {}", crate::apv_profile(&self.apv_profile).name()),
-                Format::Mjpeg => v += &format!(", quality {}", self.quality),
+                Format::Mjpeg | Format::JpegSequence => v += &format!(", quality {}", self.quality),
+                Format::DpxSequence => v += ", 10-bit RGB",
+                Format::ExrSequence => v += ", 16-bit half float, linear",
                 _ => {}
             }
             v
         };
-        let audio = if self.has_audio() || matches!(self.format, Format::Wav | Format::Aiff) {
+        let audio = if self.has_audio() || self.format.is_audio_only() {
             let ch = match r.channels {
                 1 => "Mono",
                 6 => "5.1",
@@ -577,7 +599,7 @@ impl ExportSettings {
             Format::H264 | Format::Hevc | Format::Av1 => "MP4",
             Format::ProRes | Format::DnxHr | Format::Apv | Format::Mjpeg => "QuickTime",
             Format::MxfOp1a | Format::MxfOpAtom => self.mxf_video_codec.label(),
-            Format::PngSequence | Format::TiffSequence | Format::BmpSequence => "Image sequence",
+            f if f.is_image_sequence() => "Image sequence",
             _ => "",
         };
         let format = if container.is_empty() { self.format.label().to_string() } else { format!("{} ({container})", self.format.label()) };

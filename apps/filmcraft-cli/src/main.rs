@@ -79,7 +79,7 @@ SUBCOMMANDS
          [--scale f] [--quality 0-100] [--no-audio] [--queue]
                                 export the active sequence and wait for it to finish: with an
                                 export preset (`export --list-presets`; built-in or the user's), or
-                                a format (h264|hevc|prores|dnxhr|apv|mjpeg|mxf-op1a|mxf-opatom|png|tiff|bmp|gif|wav|aiff, guessed
+                                a format (h264|hevc|prores|dnxhr|apv|mjpeg|mxf-op1a|mxf-opatom|png|tiff|bmp|gif|wav|aiff|aac, guessed
                                 from the extension); --range entire|inOut|workArea, or a custom
                                 range in seconds; --settings is ExportSettings JSON merged over the
                                 preset; --scale renders at a fraction of the frame size (0.5 =
@@ -209,6 +209,7 @@ fn format_for(path: &str) -> Option<&'static str> {
         "tif" | "tiff" => "tiff",
         "bmp" => "bmp",
         "aif" | "aiff" => "aiff",
+        "m4a" | "aac" => "aac",
         _ => return None,
     })
 }
@@ -252,12 +253,6 @@ async fn main() {
 }
 
 async fn cli() {
-    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
-        outln!("filmcraft-cli {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
-    register_hardware_decoders();
-    register_gpu_frame_renderer();
     let a = Args::parse(std::env::args().skip(1));
     // `--help` anywhere (`filmcraft-cli --help`, `filmcraft-cli export --help`) prints the reference:
     // the parser takes it as a flag option, so it never reaches the subcommand match.
@@ -265,6 +260,13 @@ async fn cli() {
         out!("{HELP}");
         return;
     }
+    // `--version` anywhere and `-V` as the subcommand, also after global options (`--demo --version`, #710).
+    if a.wants_version() {
+        outln!("filmcraft-cli {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    register_hardware_decoders();
+    register_gpu_frame_renderer();
     let Some(cmd) = a.pos(0) else { usage("missing subcommand") };
     match cmd {
         "help" | "-h" => out!("{HELP}"),
@@ -462,6 +464,9 @@ async fn cli() {
             diag(format_args!("rendered {}x{} in {:.1} ms → {out}", img.w, img.h, dt.as_secs_f64() * 1000.0));
         }
         "mcp" => {
+            if let Some(opt) = a.unknown_opt(&["--bridge", "--project", "--demo", "--data-dir"]) {
+                usage(format!("unknown mcp option `{opt}`"));
+            }
             let server = match a.opt("--bridge") {
                 Some(addr) => filmcraft_automation::FilmcraftMcp::bridge(addr).unwrap_or_else(|e| fail(e)),
                 None => match Backend::open(&a) {

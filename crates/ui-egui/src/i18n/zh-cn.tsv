@@ -187,6 +187,7 @@
 	Light	浅
 	Link	链接
 	Link Media…	链接媒体…
+	Refresh Changed Media	刷新已更改的媒体
 	Linked Selection	关联选择
 	Lock Guides	锁定参考线
 	Lumetri Color	Lumetri 颜色
@@ -487,7 +488,9 @@
 	{panel} — coming in a later milestone	{panel} — 将在后续里程碑中推出
 	Close Panel	关闭面板
 	Close Other Timeline Panels	关闭其他时间轴面板
+	Close All	全部关闭
 	Maximize Frame	最大化帧
+	Restore Frame	还原帧
 	Restore Workspace	恢复工作区
 	Reveal Sequence in Project	在项目面板中显示序列
 	Video Thumbnails	视频缩略图
@@ -963,6 +966,7 @@
 	Reset…	重置…
 	Source · {name}	源 · {name}
 	Reset Effect	重置效果
+	Reset Parameter	重置参数
 	Save Preset…	保存预设…
 	Custom Setup	自定义设置
 	Edit…	编辑…
@@ -1208,6 +1212,9 @@
 	Caption track options	字幕轨道选项
 	Timeline Display Settings	时间轴显示设置
 	Show Video Thumbnails	显示视频缩略图
+	Head	首帧
+	Head and Tail	首尾帧
+	Continuous	连续
 	Show Audio Waveform	显示音频波形
 	Expand All Tracks	展开所有轨道
 	Minimize All Tracks	最小化所有轨道
@@ -2883,6 +2890,7 @@
 	Target Bitrate	目标码率
 	Adaptive ({bpp} bits per pixel)	自适应（每像素 {bpp} 位）
 	Maximum Bitrate	最大码率
+	Quality (CRF)	质量 (CRF)
 	Key Frame Distance	关键帧间隔
 	Quality	质量
 	Render at Maximum Depth	以最大深度渲染
@@ -2949,6 +2957,9 @@
 	Step Forward 1 Frame	前进 1 帧
 	Match Playhead	匹配播放头
 	Gang to Program	联动到节目
+	AAC Audio	AAC 音频
+	AAC Audio 48 kHz 320 kbps	AAC 音频 48 kHz 320 kbps
+	MPEG-4 audio (.m4a), stereo 48 kHz AAC-LC at 320 kbps	MPEG-4 音频 (.m4a)，立体声 48 kHz AAC-LC，320 kbps
 	AIFF	AIFF
 	AIFF 48 kHz 16-bit	AIFF 48 kHz 16 位
 	AIFF, stereo 48 kHz 16-bit PCM	AIFF，立体声 48 kHz 16 位 PCM
@@ -2963,6 +2974,9 @@
 	Apple ProRes 422 HQ	Apple ProRes 422 HQ
 	Apple ProRes 422 LT	Apple ProRes 422 LT
 	Apple ProRes 422 Proxy	Apple ProRes 422 Proxy
+	Apple ProRes 4444	Apple ProRes 4444
+	Apple ProRes 4444 with Alpha	Apple ProRes 4444（带 Alpha）
+	Apple ProRes 4444 XQ	Apple ProRes 4444 XQ
 	Application	应用程序
 	Apply Guide Template	应用参考线模板
 	Auto Save Now	立即自动保存
@@ -3050,6 +3064,7 @@
 	Go to Sequence End	转到序列末尾
 	Go to Sequence Start	转到序列开头
 	H.264	H.264
+	AV1	AV1
 	H.264 1920×1080 for video sharing sites, VBR 1 pass, 16 Mbps	H.264 1920×1080（视频分享网站），VBR 1 遍，16 Mbps
 	H.264 1920×1080, VBR 1 pass, 20 Mbps target, AAC 320 kbps	H.264 1920×1080，VBR 1 遍，目标 20 Mbps，AAC 320 kbps
 	H.264 1920×1080, VBR 2 pass, 18 Mbps	H.264 1920×1080，VBR 2 遍，18 Mbps
@@ -3144,6 +3159,18 @@
 	Nudge Volume -1dB	微调音量 -1dB
 	Nudge Volume -3dB	微调音量 -3dB
 	Numbered BMP stills (24-bit)	带编号的 BMP 静帧（24 位）
+	JPEG	JPEG
+	Targa	Targa
+	DPX	DPX
+	JPEG Sequence	JPEG 序列
+	Targa Sequence	Targa 序列
+	DPX Sequence	DPX 序列
+	Numbered JPEG stills (quality 90)	带编号的 JPEG 静帧（质量 90）
+	Numbered Targa stills (24-bit, uncompressed)	带编号的 Targa 静帧（24 位，未压缩）
+	Numbered DPX stills (10-bit RGB)	带编号的 DPX 静帧（10 位 RGB）
+	OpenEXR	OpenEXR
+	OpenEXR Sequence	OpenEXR 序列
+	Numbered OpenEXR stills (half float, linear, uncompressed)	带编号的 OpenEXR 静帧（16 位半精度浮点，线性，未压缩）
 	Numbered PNG stills at the sequence's frame size	带编号的 PNG 静帧（采用序列帧大小）
 	Numbered TIFF stills (RGB, 8-bit)	带编号的 TIFF 静帧（RGB，8 位）
 	Opacity 0 → 100 % over the first second	在最初一秒内不透明度从 0 → 100%
@@ -3172,6 +3199,9 @@
 	QuickTime, ProRes 422 HQ, 24-bit 48 kHz PCM	QuickTime，ProRes 422 HQ，24 位 48 kHz PCM
 	QuickTime, ProRes 422 LT, 24-bit 48 kHz PCM	QuickTime，ProRes 422 LT，24 位 48 kHz PCM
 	QuickTime, ProRes 422 Proxy, 24-bit 48 kHz PCM	QuickTime，ProRes 422 Proxy，24 位 48 kHz PCM
+	QuickTime, ProRes 4444 (4:4:4), 24-bit 48 kHz PCM	QuickTime，ProRes 4444 (4:4:4)，24 位 48 kHz PCM
+	QuickTime, ProRes 4444 (4:4:4) with alpha channel, 24-bit 48 kHz PCM	QuickTime，ProRes 4444 (4:4:4)，带 Alpha 通道，24 位 48 kHz PCM
+	QuickTime, ProRes 4444 XQ (4:4:4), 24-bit 48 kHz PCM	QuickTime，ProRes 4444 XQ (4:4:4)，24 位 48 kHz PCM
 	QuickTime, ProRes 422, 24-bit 48 kHz PCM	QuickTime，ProRes 422，24 位 48 kHz PCM
 	Quit FilmCraft	退出 FilmCraft
 	Rate Stretch Tool	速率伸缩工具
@@ -3287,6 +3317,7 @@
 	Upper First	上方优先
 	VBR, 1 pass	VBR，1 遍
 	VBR, 2 pass	VBR，2 遍
+	CRF (constant quality)	CRF（恒定质量）
 	Vimeo 1080p Full HD	Vimeo 1080p 全高清
 	Vimeo 2160p 4K Ultra HD	Vimeo 2160p 4K 超高清
 	Voice-over Record	画外音录制
@@ -3403,6 +3434,7 @@
 	Main (8-bit; Main 10 for HDR sequences)	主要（8 位；HDR 序列使用主要 10）
 	Encoder	编码器
 	Hardware (H.265 has no software encoder)	硬件（H.265 无软件编码器）
+	Hardware (AV1 has no software encoder)	硬件（AV1 无软件编码器）
 	Text Properties	文本属性
 	Text Box Height	文本框高度
 	Paragraph Text	段落文本
@@ -3488,9 +3520,20 @@
 	Appearance Mode	外观模式
 	Next Appearance Mode	下一个外观模式
 	Sync with system	跟随系统
+	UI Scale	界面缩放
+	Auto (system)	自动（系统）
 	GPU Rendering	GPU 渲染
 	Composite on the GPU when available	可用时在 GPU 上合成
 	Text to Speech	文字转语音
 	Edit Narration	编辑旁白
 	Clear Transition	清除过渡
 	Set Transition Duration	设置过渡持续时间
+	Project Notes	项目备注
+	Get Project Notes	获取项目备注
+	Edit Project Notes	编辑项目备注
+	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	此项目的备注：待办事项、说明、帧号等… 随项目一起保存。
+	GPU acceleration is unavailable; preview renders on the CPU	GPU 加速不可用；预览在 CPU 上渲染
+	Caption Tracks	字幕轨道
+	Delete Caption Track	删除字幕轨道
+	Delete Caption Tracks	删除多个字幕轨道
+	Delete Empty Caption Tracks	删除空字幕轨道

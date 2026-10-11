@@ -109,6 +109,100 @@ fn image_sequences_are_numbered_like_premiere() {
     }
 }
 
+/// JPEG, Targa and DPX sequences (#779): numbered like the others, JPEG at the export quality,
+/// Targa with alpha when asked; every still decoded by ffmpeg (external test oracle).
+#[test]
+fn jpeg_targa_and_dpx_sequences() {
+    let (p, seq, m) = matte([0.0, 0.0, 1.0, 0.5], 64, 36, None);
+    let mut jpeg_sizes = Vec::new();
+    for (fmt, ext, alpha, quality) in [
+        (Format::JpegSequence, "jpg", false, 95),
+        (Format::JpegSequence, "jpg", false, 20),
+        (Format::TgaSequence, "tga", false, 90),
+        (Format::TgaSequence, "tga", true, 90),
+        (Format::DpxSequence, "dpx", false, 90),
+    ] {
+        let dir = Scratch::new(&format!("seq3-{ext}-{alpha}-{quality}"));
+        let mut s = ExportSettings { format: fmt, path: dir.path(&format!("Shot.{ext}")), alpha, quality, ..Default::default() };
+        s.range = Some(TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(3)));
+        assert_eq!(Format::from_name(fmt.id()), Some(fmt));
+        assert!(fmt.is_image_sequence() && s.is_image_sequence() && !s.has_audio());
+        let r = export(&p, seq, &s, &m, &Progress::default()).unwrap();
+        assert_eq!(r.frames, 3);
+        let want: Vec<String> = (0..3).map(|i| format!("Shot{i:03}.{ext}")).collect();
+        assert_eq!(files_in(&dir.0), want, "{fmt:?}");
+        let first = dir.0.join(&want[0]);
+        let bytes = std::fs::read(&first).unwrap();
+        match fmt {
+            Format::JpegSequence => {
+                let px = image::load_from_memory(&bytes).unwrap().to_rgb8().get_pixel(32, 18).0;
+                assert!(px[2] > 100 && px[0] < 20, "{px:?}");
+                jpeg_sizes.push(bytes.len());
+            }
+            Format::DpxSequence => assert_eq!(bytes.len(), 2048 + 64 * 36 * 4),
+            _ => assert_eq!(bytes.len(), 18 + 64 * 36 * if alpha { 4 } else { 3 } + 26),
+        }
+        let Some(ffmpeg) = filmcraft_testkit::ffmpeg_or_skip("jpeg / targa / dpx sequences") else { continue };
+        let first = first.to_string_lossy().to_string();
+        let out = std::process::Command::new(ffmpeg).args(["-v", "error", "-i", &first, "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).output().unwrap();
+        assert!(out.status.success(), "{first}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.stdout.len(), 64 * 36 * 4, "{first}");
+        let at = (18 * 64 + 32) * 4;
+        let px = &out.stdout[at..at + 4];
+        if alpha {
+            assert!((100..=160).contains(&px[3]) && px[2] > 200 && px[0] < 15, "{first} straight alpha: {px:?}");
+        } else {
+            assert!(px[3] == 255 && px[2] > 100 && px[2] < 240 && px[0] < 20, "{first} flattened over black: {px:?}");
+        }
+        // the top-left pixel is the top row (Targa is stored bottom-up), and all of it is blue
+        assert!(out.stdout.as_chunks::<4>().0.iter().all(|p| p[2] > 100 && p[0] < 20), "{first}");
+    }
+    assert!(jpeg_sizes[0] > jpeg_sizes[1], "quality 95 must be larger than quality 20: {jpeg_sizes:?}");
+}
+
+/// OpenEXR sequences (#806): numbered like the others, half-float linear light, RGBA with
+/// premultiplied alpha when asked; ffprobe / ffmpeg (external test oracles) read every still.
+#[test]
+fn openexr_sequences() {
+    let (p, seq, m) = matte([0.0, 0.0, 1.0, 0.5], 64, 36, None);
+    for alpha in [false, true] {
+        let dir = Scratch::new(&format!("seq-exr-{alpha}"));
+        let mut s = ExportSettings { format: Format::ExrSequence, path: dir.path("Shot.exr"), alpha, ..Default::default() };
+        s.range = Some(TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(3)));
+        assert_eq!(Format::from_name("OpenEXR"), Some(Format::ExrSequence));
+        assert!(s.is_image_sequence() && s.supports_alpha() && s.keeps_alpha() == alpha && !s.has_audio());
+        let r = export(&p, seq, &s, &m, &Progress::default()).unwrap();
+        assert_eq!(r.frames, 3);
+        let want: Vec<String> = (0..3).map(|i| format!("Shot{i:03}.exr")).collect();
+        assert_eq!(files_in(&dir.0), want);
+        let first = dir.0.join(&want[0]);
+        let bytes = std::fs::read(&first).unwrap();
+        assert_eq!(&bytes[..4], &[0x76, 0x2F, 0x31, 0x01]);
+        let Some(ffmpeg) = filmcraft_testkit::ffmpeg_or_skip("OpenEXR sequences") else { continue };
+        let out = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&first)
+            .args(["-f", "rawvideo", "-pix_fmt", "gbrapf32le", "-"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let n = 64 * 36;
+        assert_eq!(out.stdout.len(), n * 16);
+        let plane = |p: usize| -> Vec<f32> { out.stdout[p * n * 4..(p + 1) * n * 4].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect() };
+        let (g, b, r, a) = (plane(0), plane(1), plane(2), plane(3));
+        for i in 0..n {
+            assert!(g[i].abs() < 1e-3 && r[i].abs() < 1e-3, "pixel {i}: no red or green");
+            if alpha {
+                // pure blue (linear 1.0) at 50 % opacity, premultiplied
+                assert!((a[i] - 0.5).abs() < 0.01 && (b[i] - a[i]).abs() < 2e-3, "pixel {i}: {} / {}", b[i], a[i]);
+            } else {
+                // flattened over black, then linearised: well below the encoded half level
+                assert!(a[i] == 1.0 && b[i] > 0.1 && b[i] < 0.5, "pixel {i}: {} / {}", b[i], a[i]);
+            }
+        }
+    }
+}
+
 /// `alpha` keeps straight alpha in PNG and TIFF sequences; off (the default) flattens over black (#160).
 #[test]
 fn image_sequences_keep_alpha_when_asked() {
@@ -164,6 +258,147 @@ fn wav_and_aiff_audio_only() {
     }
     if let Some(j) = ffprobe_json(&["-show_streams"], &wav) {
         assert_eq!(j["streams"][0]["codec_name"], "pcm_s24le");
+    }
+}
+
+/// Root-mean-square level of decoded planar audio.
+fn rms(planes: &[Vec<f32>]) -> f32 {
+    let n = planes.iter().map(Vec::len).sum::<usize>().max(1);
+    (planes.iter().flatten().map(|s| s * s).sum::<f32>() / n as f32).sqrt()
+}
+
+#[test]
+fn aac_audio_writes_m4a_and_adts() {
+    let (p, seq, m) = matte([0.0, 0.0, 0.0, 1.0], 64, 36, Some(-6.0));
+    let dir = Scratch::new("aac-audio");
+    let range = Some(TimeRange::new(Tick::ZERO, Tick(TICKS_PER_SECOND)));
+    // .m4a: one AAC track, no video, the encoder delay in an edit list
+    let m4a = dir.path("a.m4a");
+    let s = ExportSettings { format: Format::Aac, path: m4a.clone(), range, ..Default::default() };
+    assert!(!s.has_video());
+    assert_eq!(s.audio_codec(), AudioCodec::Aac);
+    assert_eq!(s.extension(), "m4a");
+    let r = export(&p, seq, &s, &m, &Progress::default()).unwrap();
+    assert_eq!(r.frames, 48_000, "one second of samples");
+    let bytes = std::fs::read(&m4a).unwrap();
+    let file = filmcraft_isobmff::open(bytes.clone()).unwrap();
+    assert_eq!(file.tracks.len(), 1, "audio only");
+    let t = &file.tracks[0];
+    let filmcraft_isobmff::CodecConfig::Aac(cfg) = &t.entries[0].codec else { panic!("not AAC: {:?}", t.entries[0].codec) };
+    assert_eq!((cfg.object_type, cfg.sample_rate, cfg.channel_config), (2, 48_000, 2));
+    assert!(t.samples.len() >= 48_000 / 1024, "{} access units", t.samples.len());
+    let mut dec = filmcraft_aac::Decoder::new(&cfg.asc).unwrap();
+    let mut pcm: Vec<Vec<f32>> = Vec::new();
+    for i in 0..t.samples.len() {
+        let out = dec.decode(&file.read_sample(&bytes, 0, i).unwrap()).unwrap();
+        pcm.resize(out.len(), Vec::new());
+        pcm.iter_mut().zip(out).for_each(|(a, b)| a.extend(b));
+    }
+    // the -6 dBFS tone (RMS about 0.35) survives the round trip
+    assert!((0.2..0.5).contains(&rms(&pcm)), "rms {}", rms(&pcm));
+    if let Some(j) = ffprobe_json(&["-show_streams", "-show_format"], &m4a) {
+        assert_eq!(j["streams"].as_array().unwrap().len(), 1);
+        let st = &j["streams"][0];
+        assert_eq!(st["codec_name"], "aac");
+        assert_eq!(st["sample_rate"], "48000");
+        assert_eq!(st["channels"], 2);
+        let d: f64 = j["format"]["duration"].as_str().unwrap().parse().unwrap();
+        assert!((d - 1.0).abs() < 0.03, "duration {d}");
+    }
+
+    // .aac: raw ADTS, mono 44.1 kHz at 128 kbps
+    let adts = dir.path("a.aac");
+    let mut s = ExportSettings { format: Format::Aac, path: adts.clone(), range, ..Default::default() };
+    s.audio = AudioSettings { sample_rate: Some(44_100), channels: 1, bitrate_kbps: 128, ..Default::default() };
+    export(&p, seq, &s, &m, &Progress::default()).unwrap();
+    let b = std::fs::read(&adts).unwrap();
+    // AAC-LC 44.1 kHz (index 4) mono: 00010 0100 0001 000
+    let mut dec = filmcraft_aac::Decoder::new(&[0x12, 0x08]).unwrap();
+    let (mut pos, mut units, mut pcm) = (0usize, 0usize, vec![Vec::new()]);
+    while pos < b.len() {
+        let h = &b[pos..pos + 7];
+        assert_eq!((h[0], h[1] & 0xF6), (0xFF, 0xF0), "ADTS sync at {pos}");
+        assert_eq!(h[1] & 0x01, 1, "no CRC");
+        assert_eq!(((h[2] >> 2) & 0x0F, ((h[2] & 1) << 2) | (h[3] >> 6)), (4, 1), "44.1 kHz mono");
+        let len = ((h[3] as usize & 0x03) << 11) | ((h[4] as usize) << 3) | (h[5] as usize >> 5);
+        assert!(len > 7 && pos + len <= b.len(), "frame length {len} at {pos}");
+        pcm[0].extend(dec.decode(&b[pos + 7..pos + len]).unwrap().swap_remove(0));
+        pos += len;
+        units += 1;
+    }
+    assert!(units >= 44_100 / 1024, "{units} frames");
+    assert!((0.2..0.5).contains(&rms(&pcm)), "rms {}", rms(&pcm));
+    if let Some(j) = ffprobe_json(&["-show_streams", "-show_format"], &adts) {
+        assert_eq!(j["format"]["format_name"], "aac");
+        let st = &j["streams"][0];
+        assert_eq!(st["codec_name"], "aac");
+        assert_eq!(st["sample_rate"], "44100");
+        assert_eq!(st["channels"], 1);
+    }
+    if let Some(ffmpeg) = filmcraft_testkit::ffmpeg_or_skip("AAC Audio decode") {
+        for f in [&m4a, &adts] {
+            let out = std::process::Command::new(&ffmpeg).args(["-v", "error", "-xerror", "-i", f, "-f", "null", "-"]).output().unwrap();
+            assert!(out.status.success() && out.stderr.is_empty(), "{f}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+}
+
+#[test]
+fn aac_audio_settings_and_names() {
+    assert_eq!(Format::from_name("m4a"), Some(Format::Aac));
+    assert_eq!(Format::from_name("AAC Audio"), Some(Format::Aac));
+    assert_eq!(Format::from_name(Format::Aac.id()), Some(Format::Aac));
+    assert!(Format::ALL.contains(&Format::Aac) && Format::Aac.is_audio_only() && !Format::H264.is_audio_only());
+    let s = ExportSettings { format: Format::Aac, include_audio: false, ..Default::default() };
+    let sum = s.summary(1920, 1080, FrameRate::FPS_24, 48_000, Tick(10 * TICKS_PER_SECOND));
+    assert_eq!(sum.video, "No video");
+    assert_eq!(sum.audio, "AAC, 320 kbps, 48000 Hz, Stereo");
+    assert_eq!(sum.estimated_bytes, 400_000, "320 kbps for 10 s, no picture");
+    let preset = presets::find_builtin("AAC Audio 48 kHz 320 kbps").unwrap();
+    assert_eq!(preset.settings.format, Format::Aac);
+}
+
+#[test]
+fn wav_export_honours_explicit_sample_rates() {
+    let (project, sequence, sources) = matte([0.0, 0.0, 0.0, 1.0], 64, 36, Some(-6.0));
+    let dir = Scratch::new("wav-sample-rates");
+    for rate in [1, 4000, 7350, 8000, 48_000, 192_000, 192_001, 200_000, 352_800, 384_000] {
+        let settings = ExportSettings {
+            format: Format::Wav,
+            path: dir.path(&format!("{rate}.wav")),
+            audio: AudioSettings { sample_rate: Some(rate), ..Default::default() },
+            range: Some(TimeRange::new(Tick::ZERO, Tick(TICKS_PER_SECOND / 4))),
+            ..Default::default()
+        };
+        settings.validate().unwrap();
+        let resolved = settings.resolve(64, 36, FrameRate::FPS_24, 48_000);
+        assert_eq!(resolved.sample_rate, rate, "requested {rate} Hz");
+        export(&project, sequence, &settings, &sources, &Progress::default()).unwrap();
+        let bytes = std::fs::read(&settings.path).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), rate);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), rate / 4 * 4, "quarter-second stereo 16-bit PCM");
+        if let Some(probe) = ffprobe_json(&["-show_streams"], &settings.path) {
+            assert_eq!(probe["streams"][0]["sample_rate"], rate.to_string());
+        }
+    }
+    let settings = ExportSettings { format: Format::Wav, ..Default::default() };
+    assert_eq!(settings.resolve(64, 36, FrameRate::FPS_24, 44_100).sample_rate, 44_100);
+}
+
+#[test]
+fn aac_export_rejects_unsupported_explicit_sample_rates() {
+    let (project, sequence, sources) = matte([0.0, 0.0, 0.0, 1.0], 64, 36, Some(-6.0));
+    let dir = Scratch::new("aac-sample-rates");
+    for rate in [4000, 192_001, 200_000, 384_000] {
+        let settings = ExportSettings {
+            path: dir.path(&format!("{rate}.mp4")),
+            audio: AudioSettings { sample_rate: Some(rate), ..Default::default() },
+            range: Some(TimeRange::new(Tick::ZERO, Tick(TICKS_PER_SECOND / 4))),
+            ..Default::default()
+        };
+        let error = export(&project, sequence, &settings, &sources, &Progress::default()).unwrap_err();
+        assert!(error.to_string().contains("sample rate"), "{error}");
+        assert!(!Path::new(&settings.path).exists(), "an unsupported rate must not produce a substitute file");
     }
 }
 
@@ -322,6 +557,40 @@ fn two_pass_and_cbr_h264() {
         let f = src.video_frame(FrameRequest::full(Tick(TICKS_PER_SECOND / 2))).unwrap().to_rgba8();
         assert!((f[2] as i32 - 204).abs() < 12 && (f[1] as i32 - 127).abs() < 12, "{mode:?}: {:?}", &f[..4]);
     }
+}
+
+#[test]
+fn crf_h264() {
+    // settings saved before CRF existed read as the default; the range is checked
+    let old: ExportSettings = serde_json::from_value(serde_json::json!({"format": "h264", "bitrateMode": "vbr1Pass"})).unwrap();
+    assert_eq!(old.crf, DEFAULT_CRF);
+    let c: ExportSettings = serde_json::from_value(serde_json::json!({"bitrateMode": "crf", "crf": 18.0})).unwrap();
+    assert_eq!((c.bitrate_mode, c.crf), (BitrateMode::Crf, 18.0));
+    for bad in [-1.0, 51.5, f32::NAN, f32::INFINITY] {
+        assert!(ExportSettings { bitrate_mode: BitrateMode::Crf, crf: bad, ..Default::default() }.validate().is_err(), "{bad}");
+    }
+    // the value only matters in CRF mode
+    assert!(ExportSettings { crf: f32::NAN, ..Default::default() }.validate().is_ok());
+    let summary = c.summary(1920, 1080, FrameRate::FPS_25, 48_000, Tick(10 * TICKS_PER_SECOND));
+    assert!(summary.video.contains("CRF (constant quality) 18"), "{}", summary.video);
+
+    // one pass at constant quality: a lower factor spends more bits, and both decode to the picture
+    let (p, seq, m) = matte([0.2, 0.5, 0.8, 1.0], 320, 180, None);
+    let dir = Scratch::new("crf");
+    let mut sizes = Vec::new();
+    for crf in [10.0, 40.0] {
+        let path = dir.path(&format!("crf{crf}.mp4"));
+        let s = ExportSettings { format: Format::H264, path: path.clone(), bitrate_mode: BitrateMode::Crf, crf, include_audio: false, ..Default::default() };
+        let prog = Progress::default();
+        let r = export(&p, seq, &s, &m, &prog).unwrap();
+        assert_eq!((r.frames, prog.total.load(Ordering::Relaxed)), (24, 24));
+        let bytes: Arc<[u8]> = std::fs::read(&path).unwrap().into();
+        sizes.push(bytes.len());
+        let src = filmcraft_codecs::open_bytes("x.mp4", bytes).unwrap();
+        let f = src.video_frame(FrameRequest::full(Tick(TICKS_PER_SECOND / 2))).unwrap().to_rgba8();
+        assert!((f[2] as i32 - 204).abs() < 12 && (f[1] as i32 - 127).abs() < 12, "CRF {crf}: {:?}", &f[..4]);
+    }
+    assert!(sizes[0] > sizes[1], "CRF 10 {} bytes, CRF 40 {} bytes", sizes[0], sizes[1]);
 }
 
 #[test]
@@ -487,6 +756,7 @@ fn a_time_left_reads_like_a_clock() {
     assert!(!format_eta(Duration::MAX).is_empty(), "the largest duration cannot overflow");
 }
 
+
 #[test]
 fn h265_is_a_format_that_needs_a_registered_encoder() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -496,7 +766,7 @@ fn h265_is_a_format_that_needs_a_registered_encoder() {
     }
     assert_eq!(Format::from_name(Format::Hevc.id()), Some(Format::Hevc));
     assert_eq!((Format::Hevc.extension(), Format::Hevc.label()), ("mp4", "H.265 (HEVC)"));
-    assert!(Format::ALL.contains(&Format::Hevc) && Format::ALL.len() == 15);
+    assert!(Format::ALL.contains(&Format::Hevc) && Format::ALL.len() == 20);
     let s: ExportSettings = serde_json::from_value(serde_json::json!({"format": "hevc"})).unwrap();
     assert_eq!(s.format, Format::Hevc);
     assert_eq!(serde_json::to_value(&s).unwrap()["format"], "hevc");
@@ -516,6 +786,8 @@ fn h265_is_a_format_that_needs_a_registered_encoder() {
     let e = ExportSettings { bitrate_mode: BitrateMode::Vbr2Pass, ..h.clone() }.validate().unwrap_err();
     assert!(e.to_string().contains("two-pass"), "{e}");
     assert!(ExportSettings { bitrate_mode: BitrateMode::Cbr, ..h.clone() }.validate().is_ok());
+    let e = ExportSettings { bitrate_mode: BitrateMode::Crf, ..h.clone() }.validate().unwrap_err();
+    assert!(e.to_string().contains("CRF"), "{e}");
 
     // formats with a built-in encoder are always available; this one only when a registered probe says so
     assert!(Format::ALL.iter().filter(|f| f.has_builtin_encoder()).all(|f| available(*f)));
