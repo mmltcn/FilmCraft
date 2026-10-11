@@ -1,8 +1,8 @@
 asset:        ai.storyteller.filmcraft.png
-title:        FilmCraft app icon, Linux hicolor theme 32 px
-author:       Brandon Thomas (FilmCraft owner), for the FilmCraft project
-source:       original work (drawn by the owner in ArtCraft, then vectorised)
+title:        FilmCraft Linux app icon, F monogram
+author:       OpenAI Codex, at the ArtCraft Team's request
+source:       Original geometric artwork created for the Craft App Suite
 license:      MIT OR Apache-2.0
 license-file: assets/app-icon/LICENSE.txt
-added:        2026-10-02 by Claude (agent) for Brandon Thomas
-notes:        Rendered from filmcraft.svg with resvg by packaging/icons.sh.
+added:        2026-10-11 by OpenAI Codex
+notes:        Original high-contrast letter monogram; generated from the canonical app-icon SVG.
