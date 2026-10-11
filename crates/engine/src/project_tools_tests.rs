@@ -469,13 +469,13 @@ fn clear_deletes_a_bin_with_everything_in_it() {
     select(&mut s);
     // an empty bin, by its id: gone, nothing else touched
     let r = s.execute("project.delete", json!({"items": [empty]})).unwrap();
-    assert_eq!(r, json!({"items": 0, "bins": 1}));
+    assert_eq!(r, json!({"items": 0, "bins": 1, "offline": 0}));
     assert!(s.project.root.find_bin(filmcraft_project::BinId(empty)).is_none());
     assert_eq!(s.project.items.len(), before);
     // a bin holding a sub-bin holding a clip: all three go
     select(&mut s);
     let r = s.execute("project.delete", json!({"items": [outer]})).unwrap();
-    assert_eq!(r, json!({"items": 1, "bins": 1}));
+    assert_eq!(r, json!({"items": 1, "bins": 1, "offline": 0}));
     assert!(s.project.root.find_bin(filmcraft_project::BinId(outer)).is_none());
     assert!(s.project.root.find_bin(filmcraft_project::BinId(inner)).is_none());
     assert!(s.project.item(ocean).is_none());
@@ -487,7 +487,7 @@ fn clear_deletes_a_bin_with_everything_in_it() {
     // the clip, its bin and the bin around it all named: each counted once
     select(&mut s);
     let r = s.execute("project.delete", json!({"items": [ocean.0, inner, outer]})).unwrap();
-    assert_eq!(r, json!({"items": 1, "bins": 1}));
+    assert_eq!(r, json!({"items": 1, "bins": 1, "offline": 0}));
     assert_eq!(s.project.items.len(), before - 1);
     s.execute("edit.undo", json!({})).unwrap();
     // the project's own top bin is never cleared
@@ -495,4 +495,28 @@ fn clear_deletes_a_bin_with_everything_in_it() {
     select(&mut s);
     s.execute("project.delete", json!({"items": [root]})).unwrap();
     assert_eq!(s.project.items.len(), before);
+}
+
+#[test]
+fn deleting_media_used_on_the_timeline_makes_it_offline() {
+    let mut s = Session::default();
+    s.execute("file.newProject", json!({"name": "Offline"})).unwrap();
+    s.execute("file.newSequence", json!({"name": "Seq", "fps": 25, "video": 1, "audio": 0, "width": 16, "height": 16})).unwrap();
+    let item = s.execute("file.newOfflineFile", json!({"name": "Clip", "seconds": 2, "fps": 25, "video": true, "audio": false, "width": 16, "height": 16})).unwrap()["item"]
+        .as_u64()
+        .unwrap();
+    s.execute("timeline.place", json!({"item": item, "track": "V1", "time": 0})).unwrap();
+    let clips_before = s.project.sequences().next().unwrap().as_sequence().unwrap().video_tracks[0].items.len();
+    let r = s.execute("project.delete", json!({"items": [item]})).unwrap();
+    assert_eq!(r["offline"], 1);
+    assert_eq!(r["items"], 0);
+    assert!(s.project.item(ItemId(item)).unwrap().as_media().unwrap().offline);
+    assert_eq!(s.project.sequences().next().unwrap().as_sequence().unwrap().video_tracks[0].items.len(), clips_before);
+    let unused = s.execute("file.newOfflineFile", json!({"name": "Spare", "seconds": 1, "fps": 25, "video": true, "audio": false, "width": 16, "height": 16})).unwrap()["item"]
+        .as_u64()
+        .unwrap();
+    let r = s.execute("project.delete", json!({"items": [unused]})).unwrap();
+    assert_eq!(r["items"], 1);
+    assert_eq!(r["offline"], 0);
+    assert!(s.project.item(ItemId(unused)).is_none());
 }

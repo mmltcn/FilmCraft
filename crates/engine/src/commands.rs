@@ -2820,20 +2820,48 @@ fn build() -> Vec<CommandSpec> {
             }
             items.sort_by_key(|i| i.0);
             items.dedup();
+            let mut used = std::collections::HashSet::new();
+            for it in s.project.sequences() {
+                if let Some(q) = it.as_sequence() {
+                    for t in q.all_tracks() {
+                        used.extend(t.items.iter().map(|x| x.item));
+                    }
+                }
+            }
+            let mut gone = Vec::new();
+            let mut offlined = Vec::new();
+            for i in items {
+                let keep = used.contains(&i)
+                    && s.project.item(i).and_then(filmcraft_project::ProjectItem::as_media).is_some_and(|m| matches!(m.media, MediaRef::File { .. }));
+                if keep {
+                    offlined.push(i);
+                } else {
+                    gone.push(i);
+                }
+            }
             s.edit("Clear", |pr, st| {
+                for i in &offlined {
+                    if let Some(m) = pr.item_mut(*i).and_then(filmcraft_project::ProjectItem::as_media_mut) {
+                        m.offline = true;
+                    }
+                }
                 for b in &bins {
                     pr.root.remove_bin(*b);
                 }
-                for i in &items {
+                for i in &offlined {
+                    if pr.root.parent_of(*i).is_none() {
+                        pr.root.children.push(filmcraft_project::BinEntry::Item(*i));
+                    }
+                }
+                for i in &gone {
                     pr.items.remove(i);
                     pr.root.remove_item(*i);
                 }
-                // remove track items that referenced deleted media
                 let seq_ids: Vec<ItemId> = pr.sequences().map(|q| q.id).collect();
                 for sid in seq_ids {
                     if let Some(q) = pr.sequence_mut(sid) {
                         for t in q.all_tracks_mut() {
-                            t.items.retain(|x| !items.contains(&x.item));
+                            t.items.retain(|x| !gone.contains(&x.item));
                             filmcraft_edit::remove_orphan_transitions(t);
                         }
                     }
@@ -2841,11 +2869,12 @@ fn build() -> Vec<CommandSpec> {
                 st.project_selection.clear();
                 Ok(())
             })?;
-            for i in &items {
+            for i in gone.iter().chain(&offlined) {
                 s.media.remove(*i);
             }
+            crate::relink::refresh(s);
             s.fix_state();
-            Ok(json!({"items": items.len(), "bins": bins.len()}))
+            Ok(json!({"items": gone.len(), "bins": bins.len(), "offline": offlined.len()}))
         }),
         cmd!("project.moveToBin", "Move to Bin", [], None, r#"{"items":[id|binId]?,"bin":binId|null}"#, always, |s, p| {
             let items: Vec<ItemId> = match p.get("items").and_then(Value::as_array) {
